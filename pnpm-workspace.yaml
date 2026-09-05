@@ -1,0 +1,8 @@
+packages:
+  - ui-packages/*
+  - web-packages/*
+
+onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - '@tailwindcss/oxide'
+  - esbuild
