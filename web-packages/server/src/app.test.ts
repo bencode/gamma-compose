@@ -1,8 +1,31 @@
 import { describe, expect, it } from 'vitest'
+import { readAgentConfig } from './agent/config.js'
 import { createApp } from './app.js'
 
 describe('HTTP API', () => {
   const app = createApp()
+
+  it('disables unconfigured chat without disabling other APIs', async () => {
+    const config = await app.request('/api/agent/config')
+    expect(await config.json()).toEqual({ enabled: false })
+    expect(config.headers.get('cache-control')).toBe('no-store')
+    const response = await app.request('/api/agent/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(response.status).toBe(503)
+  })
+
+  it('exposes the configured model without exposing the secret', async () => {
+    const configured = createApp(undefined, readAgentConfig({ GLM_API_KEY: 'server-secret' }))
+    const response = await configured.request('/api/agent/config')
+    expect(await response.json()).toEqual({
+      enabled: true,
+      provider: 'zai-coding-cn',
+      modelId: 'glm-5.3',
+    })
+  })
 
   it('reports health without external services', async () => {
     const response = await app.request('/api/health')

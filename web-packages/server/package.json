@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./agent-contract": {
+      "types": "./src/agent/contract.ts"
+    },
     "./compile-contract": {
       "types": "./src/compiler/contract.ts"
     }

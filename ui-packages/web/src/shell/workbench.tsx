@@ -3,6 +3,7 @@ import { useState, useSyncExternalStore } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { demoFiles, demoProject } from '../core/project/demo-project'
 import { ConversationPanel } from '../features/conversation/conversation-panel'
+import { useConversation } from '../features/conversation/use-conversation'
 import { FileBrowser } from '../features/files/file-browser'
 import { PreviewPanel } from '../features/preview/preview-panel'
 import { usePreview } from '../features/preview/use-preview'
@@ -17,9 +18,9 @@ const subscribeDesktop = (notify: () => void) => {
 
 export const Workbench = () => {
   const preview = usePreview(demoProject)
+  const conversation = useConversation()
   const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot)
   const [view, setView] = useState('preview')
-  const [draft, setDraft] = useState('')
   const [selectedPath, setSelectedPath] = useState('src/app.tsx')
   const [expandedDirectories, setExpandedDirectories] = useState(['src'])
 
@@ -60,7 +61,7 @@ export const Workbench = () => {
                 </Tabs.Trigger>
               </Tabs.List>
             </header>
-            <ConversationPanel draft={draft} onDraftChange={setDraft} />
+            <ConversationPanel {...conversation} />
           </aside>
         </Panel>
         {isDesktop && (

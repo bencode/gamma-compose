@@ -1,6 +1,8 @@
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { type AgentServerConfig, readAgentConfig } from './agent/config.js'
+import { createAgentRoutes } from './agent/proxy.js'
 import { compileProject } from './compiler/compile.js'
 import { InvalidCompileInput, maxCompileBytes, readCompileInput } from './compiler/input.js'
 
@@ -9,8 +11,12 @@ type HealthResponse = {
   service: 'gamma-compose'
 }
 
-export const createApp = (webRoot?: string) => {
+export const createApp = (
+  webRoot?: string,
+  agentConfig: AgentServerConfig = readAgentConfig({}),
+) => {
   const app = new Hono()
+  app.route('/api/agent', createAgentRoutes(agentConfig))
 
   app.get('/api/health', c =>
     c.json({ status: 'ok', service: 'gamma-compose' } satisfies HealthResponse),

@@ -1,15 +1,16 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { demoFiles } from '../core/project/demo-project'
 import { Workbench } from './workbench'
 
 beforeEach(() => {
-  vi.spyOn(globalThis, 'fetch').mockImplementation(
-    async () =>
-      new Response(JSON.stringify({ ok: true, js: 'export {}', css: '', warnings: [] }), {
-        headers: { 'Content-Type': 'application/json' },
-      }),
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async input =>
+    String(input) === '/api/agent/config'
+      ? Response.json({ enabled: false })
+      : new Response(JSON.stringify({ ok: true, js: 'export {}', css: '', warnings: [] }), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
   )
 })
 afterEach(() => vi.restoreAllMocks())
@@ -54,7 +55,7 @@ describe('workbench', () => {
     await user.click(tabs.getByRole('tab', { name: 'Files' }))
 
     expect(screen.getByTitle('Project preview')).toBe(frame)
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
     expect(draft).toHaveValue('A team workspace')
     const visibleFiles = within(screen.getByRole('region', { name: 'File browser' }))
     expect(visibleFiles.getByRole('button', { name: 'src' })).toHaveAttribute(
@@ -68,5 +69,71 @@ describe('workbench', () => {
       'aria-current',
       'true',
     )
+  })
+
+  it('retains a live conversation across tabs and responsive panel remounts', async () => {
+    let desktop = false
+    const listeners = new Set<() => void>()
+    vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+      matches: desktop,
+      media: query,
+      onchange: null,
+      addEventListener: (_event: string, listener: EventListenerOrEventListenerObject | null) => {
+        if (typeof listener === 'function') listeners.add(listener as () => void)
+      },
+      removeEventListener: (
+        _event: string,
+        listener: EventListenerOrEventListenerObject | null,
+      ) => {
+        if (typeof listener === 'function') listeners.delete(listener as () => void)
+      },
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined
+    vi.mocked(fetch).mockImplementation(async input => {
+      if (String(input) === '/api/agent/config')
+        return Response.json({ enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' })
+      if (String(input).endsWith('/chat/completions')) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller
+            },
+          }),
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        )
+      }
+      return Response.json({ ok: true, js: 'export {}', css: '', warnings: [] })
+    })
+    render(<Workbench />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+      target: { value: 'Build a page' },
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(stream).toBeDefined())
+    fireEvent.click(screen.getByRole('tab', { name: 'Files' }))
+    act(() => {
+      desktop = true
+      listeners.forEach(notify => {
+        notify()
+      })
+    })
+    expect(screen.getByRole('article', { name: 'You' })).toHaveTextContent('Build a page')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+    act(() => {
+      stream?.enqueue(
+        new TextEncoder().encode(
+          'data: {"choices":[{"index":0,"delta":{"content":"Let us discuss it."},"finish_reason":"stop"}]}\n\n',
+        ),
+      )
+      stream?.close()
+    })
+    expect(await screen.findByText('Let us discuss it.')).toBeInTheDocument()
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith('/chat/completions')),
+    ).toHaveLength(1)
   })
 })
