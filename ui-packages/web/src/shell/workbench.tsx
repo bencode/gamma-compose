@@ -1,10 +1,11 @@
 import * as Tabs from '@radix-ui/react-tabs'
 import { useState, useSyncExternalStore } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import { demoFiles } from '../core/project/demo-project'
+import { demoFiles, demoProject } from '../core/project/demo-project'
 import { ConversationPanel } from '../features/conversation/conversation-panel'
 import { FileBrowser } from '../features/files/file-browser'
 import { PreviewPanel } from '../features/preview/preview-panel'
+import { usePreview } from '../features/preview/use-preview'
 
 const desktopQuery = '(min-width: 900px)'
 const getDesktopSnapshot = () => window.matchMedia(desktopQuery).matches
@@ -15,6 +16,7 @@ const subscribeDesktop = (notify: () => void) => {
 }
 
 export const Workbench = () => {
+  const preview = usePreview(demoProject)
   const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot)
   const [view, setView] = useState('preview')
   const [draft, setDraft] = useState('')
@@ -43,18 +45,18 @@ export const Workbench = () => {
         >
           <aside
             className="flex h-full min-h-0 min-w-0 flex-col bg-panel max-[899px]:border-b max-[899px]:border-line"
-            aria-label="对话工作区"
+            aria-label="Conversation workspace"
           >
             <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-line pr-3 pl-4">
               <h1 className="brand min-w-0 truncate" title="Gamma Compose">
                 Gamma Compose<span aria-hidden="true">.</span>
               </h1>
-              <Tabs.List className="view-tabs shrink-0" aria-label="右侧视图">
+              <Tabs.List className="view-tabs shrink-0" aria-label="Output view">
                 <Tabs.Trigger className="view-tab" value="preview">
-                  预览
+                  Preview
                 </Tabs.Trigger>
                 <Tabs.Trigger className="view-tab" value="files">
-                  文件
+                  Files
                 </Tabs.Trigger>
               </Tabs.List>
             </header>
@@ -63,14 +65,14 @@ export const Workbench = () => {
         </Panel>
         {isDesktop && (
           <Separator
-            aria-label="调整聊天区宽度"
+            aria-label="Resize conversation panel"
             className="relative z-10 w-px bg-line after:absolute after:inset-y-0 after:-inset-x-1 after:content-[''] focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-accent data-[separator=hover]:bg-accent data-[separator=active]:bg-accent [@media(pointer:coarse)]:after:-inset-x-3"
           />
         )}
         <Panel id="output" minSize={isDesktop ? '180px' : '0%'}>
-          <main className="@container h-full min-h-0 min-w-0" aria-label="项目内容">
-            <Tabs.Content className="output-panel" value="preview">
-              <PreviewPanel />
+          <main className="@container h-full min-h-0 min-w-0" aria-label="Project content">
+            <Tabs.Content className="output-panel" value="preview" forceMount>
+              <PreviewPanel {...preview} />
             </Tabs.Content>
             <Tabs.Content className="output-panel" value="files">
               <FileBrowser

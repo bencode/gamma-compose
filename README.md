@@ -1,38 +1,44 @@
 # Gamma Compose
 
-一个面向 React 页面搭建的浏览器工作台。长期方向是让浏览器中的 Agent 生成 React 文件或 Scene 描述，由 Node 服务完成编译，再在浏览器中组合运行。
+A browser workbench for building React pages. Project files live in the browser;
+a stateless Node service compiles them into JavaScript and CSS, which run in an
+isolated preview.
 
-## 当前状态：迭代 1
+## Current iteration: React compilation and preview
 
-- 左侧 44px 紧凑顶栏、空白聊天记录和消息输入框；右侧全高预览或文件浏览。
-- 聊天区不显示页面介绍或草稿提示；Agent 未接入时发送禁用，原因通过按钮提示与可访问性描述提供。
-- 主面板使用 react-resizable-panels v4，聊天输入区及主布局使用 Tailwind 4 工具类。
-- 可以展开示例目录、查看只读源码，切换视图时保留草稿和文件选择。
-- 预览仅显示「编译器尚未接入」，发送按钮禁用。没有模型调用或模拟生成结果。
-- 示例文件只用于展示，不是完整的可运行项目或正式项目协议。
-- 状态只保留在内存中，刷新页面后清空。
-- 健康接口只用于开发诊断，界面不显示服务状态，也不自动轮询。
+- A resizable conversation panel and full-height preview or read-only file browser.
+- One project entry and a collection of text files submitted to the compiler.
+- React, built-in shadcn/Radix components, Tailwind CSS 4, and ordinary CSS bundled together.
+- A runnable team workspace with project search, a status filter, and a dialog.
+- Compilation diagnostics, preview loading errors, runtime errors, and retry.
+- All project copy, comments, and documentation are in English.
 
-## 开发
+The Agent is not connected yet, so sending messages remains disabled.
+Files and conversation drafts stay in memory; refreshing clears local state.
+There is no source editor, project persistence, Scene compiler, or module registry.
 
-使用 Node 24 和 pnpm 10.14.0。在仓库根目录运行：
+## Development
+
+Use Node 24 and pnpm 10.14.0. From the repository root:
 
 ```sh
 pnpm install
 pnpm dev
 ```
 
-打开 http://localhost:5301。Hono 服务默认使用 3301 端口，Vite 将 /api 请求代理到该服务；前端端口占用时启动失败，不自动换端口。
+Open http://localhost:5301. Vite proxies /api to the Hono service on port 3301.
+The frontend fails if its port is occupied.
 
-自定义后端端口时同步指定开发代理：
+To use a different backend port:
 
 ```sh
 PORT=3302 GAMMA_BACKEND=http://127.0.0.1:3302 pnpm dev
 ```
 
-环境变量由 shell 或部署环境提供，不自动加载 .env 文件。
+Environment variables come from the shell or deployment environment; .env files
+are not loaded automatically.
 
-## 检查与生产运行
+## Checks and production
 
 ```sh
 pnpm check
@@ -40,52 +46,120 @@ pnpm build
 pnpm start
 ```
 
-- check：只读运行 Biome、TypeScript 和行为测试。
-- build：分别输出 ui-packages/web/dist 和 web-packages/server/dist。
-- start：Node 运行后端构建产物，同源提供前端页面与 API，访问 http://localhost:3301。
-- 生产启动前必须构建前端；静态资源目录从后端模块位置解析，不依赖当前目录。
-- 当前使用完整 workspace 部署；启动不依赖 tsx，不提供 Docker 或独立发布包。
+- check runs Biome, TypeScript, and behavior tests without rewriting files.
+- build produces ui-packages/web/dist and web-packages/server/dist.
+- start runs the compiled Node server and serves the frontend and API on port 3301.
+- Production compilation still needs the complete workspace, installed dependencies,
+  and the built-in UI source package. It does not require tsx.
+- Build before starting production. Static assets resolve relative to the server
+  module, not the current working directory.
 
-诊断接口：
+## Compilation contract
 
-```sh
-curl http://localhost:3301/api/health
-# {"status":"ok","service":"gamma-compose"}
+```http
+POST /api/compile
+Content-Type: application/json
 ```
 
-未知 /api 路径返回 JSON 404；非 API 页面导航由 React Router 显示不存在页面，缺失静态文件返回 HTTP 404。
+```ts
+type CompileInput = {
+  entry: string
+  files: Record<string, string>
+}
 
-## 代码结构
+type CompileDiagnostic = {
+  message: string
+  path?: string
+  line?: number
+  column?: number
+}
 
-| 目录 | 职责 |
+type CompileResult =
+  | { ok: true; js: string; css: string; warnings: CompileDiagnostic[] }
+  | { ok: false; errors: CompileDiagnostic[] }
+```
+
+The example entry, src/main.tsx, mounts the application into #root. The compiler
+does not require a particular component export or execute the entry on the server.
+
+Limits and resolution:
+
+- Maximum request body: 2 MiB. Between 1 and 128 text files.
+- File keys must be canonical project-relative paths.
+- Local TS, TSX, JS, JSX, JSON, and CSS imports resolve only inside the submitted file collection.
+- Direct package imports: react, react/jsx-runtime, react/jsx-dev-runtime,
+  react-dom, react-dom/client, @gamma-compose/ui, and @gamma-compose/ui/styles.css.
+- CSS may import tailwindcss. Built-in component dependencies come from the installed workspace.
+- Unknown packages, remote modules, filesystem escapes, custom Tailwind plugins,
+  JavaScript configuration, and @source directory scanning are rejected.
+- No per-request package installation, project directories, build scripts, or artifact storage.
+- HTTP statuses: 200 success, 400 invalid input, 413 request too large,
+  422 compilation failure, 500 unexpected service failure.
+- Diagnostics use one-based lines and columns when a project location is available.
+  Runtime errors are not mapped back to TSX; full TypeScript type checking is not included.
+
+Tailwind scans the submitted source text and the built-in component sources.
+Use complete class names, not expressions such as bg-${color}-500. Custom CSS
+and theme variables are supported. CSS and JavaScript are returned together;
+loading JavaScript alone is insufficient.
+
+## Built-in components
+
+Import from @gamma-compose/ui:
+
+Button, Input, Textarea, Label, Card, Badge, Select, Checkbox, Dialog, Tabs,
+and Table, including their composition subcomponents.
+
+Import @gamma-compose/ui/styles.css once from the project entry.
+Components are adapted from the shadcn/ui Radix registry; upstream notices are
+retained in ui-packages/ui/THIRD_PARTY_NOTICES.md. This notice does not choose a
+license for Gamma Compose itself.
+
+## Preview boundary
+
+The preview runs in an iframe with sandbox="allow-scripts", without same-origin
+permission. It owns its DOM, CSS, and React instance. The host sends compiled
+contents to the frame; the frame loads a local Blob and reports lifecycle errors
+through a source-checked message channel.
+
+The preview CSP blocks fetch requests, remote scripts and styles, form submission,
+and external image/font resources. Data/blob images are permitted. Popups and top
+navigation are not enabled. This is not CPU or memory isolation against malicious
+code and is not a complete public multi-tenant execution service.
+
+Switching Preview and Files keeps the loaded iframe mounted. Desktop resizing
+keeps both panels at least 180px wide, with a default conversation width of 360px.
+Below 900px the layout becomes vertical; changing across that breakpoint can
+remount the preview, while preserving the compiled result, draft, and file selection.
+
+## Repository layout
+
+| Directory | Responsibility |
 | --- | --- |
-| ui-packages/web/src/shell | 路由、工作台布局与跨视图状态 |
-| ui-packages/web/src/features | 对话草稿、文件浏览与预览展示 |
-| ui-packages/web/src/core/project | 内部示例源码数据 |
-| web-packages/server/src | Hono 接口、静态资源和 Node 启动入口 |
+| ui-packages/ui | Built-in components and theme source |
+| ui-packages/web/src/shell | Workbench layout and shared view state |
+| ui-packages/web/src/core | Example project and compilation client |
+| ui-packages/web/src/features | Conversation, file browser, and isolated preview |
+| web-packages/server/src/compiler | Compilation contract, validation, resolution, and CSS pipeline |
 
-不提前创建共享协议、编译器或 Agent 空包。TypeScript 使用具名导出、type 类型和严格检查；Vite 配置按工具约定使用默认导出。
+## Manual acceptance
 
-## 手工验收
+1. Open the workspace and confirm the example compiles and displays.
+2. Search projects, change the status filter, and open/close the dialog using the keyboard.
+3. Switch to Files, inspect the entry and component source, then return to Preview.
+   The search and filter state should remain unchanged.
+4. Enter a conversation draft and verify view changes preserve it.
+5. Drag the desktop separator, use its keyboard controls, and double-click to reset.
+6. Check a 390px viewport and narrow desktop panels for overflow.
+7. Exercise compilation and runtime failures; confirm an English error and a working retry.
+8. Start the production build and verify compilation without a development server.
 
-1. 桌面打开工作台，右侧预览从顶部延伸到底部。
-2. 输入草稿，切换文件，展开目录并选择 styles.css；往返切换后状态保留。
-3. 键盘操作视图标签、目录与文件；只读源码可聚焦并滚动。
-4. 在 390px 宽度验证上下布局，源码区域内部滚动，页面无横向溢出。
-5. 生产启动后刷新页面，验证健康接口、未知页面及缺失静态资源。
-6. 在宽度至少 900px 的桌面拖动左右分隔线：聊天区默认 360px，两侧各保留至少 180px，不另设聊天区最大宽度。分隔线支持键盘调整及双击恢复默认宽度。
-7. 拖动后往返切换预览与文件，尺寸和输入内容保持。跨越 900px 断点时恢复默认尺寸，但草稿和文件选择不清空。
+GET /api/health remains a diagnostic endpoint; the UI does not poll it.
+Unknown /api routes return JSON 404. Unknown application routes show a not-found
+page; missing static assets return HTTP 404.
 
-窄屏维持上下 40%／60% 布局，不显示拖动柄。文件目录与源码之间不支持拖动。面板尺寸只在当前桌面布局中保留，不写入浏览器存储。
+## Next iterations
 
-聊天栏缩窄时品牌文字截断，预览／文件按钮保持可见。右侧内容区宽度不超过 479px 时，文件目录排列在源码上方；这一行为依据面板实际宽度，而非浏览器宽度。
-
-## 后续迭代
-
-1. **应用骨架**：本轮范围。
-2. **React 编译与预览**：浏览器文件提交到 Node，加载 JS/CSS 并预览。
-3. **Scene 编译与组合**：JSON → TSX，与 React 模块组合。
-4. **浏览器 Agent**：接入 Pi、模型及文件/编译工具。
-5. **完整演示**：本地持久化、导出、部署说明与 SaaS 示例。
-
-后续接口和文件范围在对应迭代前单独设计，本轮不预设 Scene 或模块注册协议。
+1. Scene JSON-to-TSX compilation.
+2. Browser Pi Agent, model integration, and file/build tools.
+3. Local persistence, export, and a complete deployment demonstration.

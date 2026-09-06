@@ -1,5 +1,8 @@
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { compileProject } from './compiler/compile.js'
+import { InvalidCompileInput, maxCompileBytes, readCompileInput } from './compiler/input.js'
 
 type HealthResponse = {
   status: 'ok'
@@ -11,6 +14,41 @@ export const createApp = (webRoot?: string) => {
 
   app.get('/api/health', c =>
     c.json({ status: 'ok', service: 'gamma-compose' } satisfies HealthResponse),
+  )
+  app.post(
+    '/api/compile',
+    bodyLimit({
+      maxSize: maxCompileBytes,
+      onError: c =>
+        c.json({ ok: false, errors: [{ message: 'Compile requests cannot exceed 2 MiB' }] }, 413),
+    }),
+    async c => {
+      if (
+        c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json'
+      ) {
+        return c.json({ ok: false, errors: [{ message: 'Use application/json' }] }, 400)
+      }
+      let value: unknown
+      try {
+        value = await c.req.json()
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error
+        return c.json({ ok: false, errors: [{ message: 'The request is not valid JSON' }] }, 400)
+      }
+      try {
+        const result = await compileProject(readCompileInput(value))
+        return c.json(result, result.ok ? 200 : 422)
+      } catch (error) {
+        if (error instanceof InvalidCompileInput) {
+          return c.json({ ok: false, errors: [{ message: error.message }] }, 400)
+        }
+        console.error('Compilation failed', error)
+        return c.json(
+          { ok: false, errors: [{ message: 'The compilation service failed. Please retry.' }] },
+          500,
+        )
+      }
+    },
   )
   app.all('/api', c => c.json({ error: 'Not found' }, 404))
   app.all('/api/*', c => c.json({ error: 'Not found' }, 404))

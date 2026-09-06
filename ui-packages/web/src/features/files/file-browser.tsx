@@ -49,15 +49,15 @@ const DirectoryEntries = ({ directory = '', ...props }: DirectoryEntriesProps) =
 }
 
 export const FileBrowser = (props: FileBrowserProps) => (
-  <section className="file-browser" aria-label="文件浏览">
-    <nav className="file-navigation" aria-label="项目文件">
-      <h2 className="file-navigation-title">示例文件</h2>
+  <section className="file-browser" aria-label="File browser">
+    <nav className="file-navigation" aria-label="Project files">
+      <h2 className="file-navigation-title">Example files</h2>
       <DirectoryEntries {...props} />
     </nav>
-    <section className="source-panel" aria-label="源码">
+    <section className="source-panel" aria-label="Source code">
       <header className="source-header">
         <h2>{props.selectedPath}</h2>
-        <span>只读</span>
+        <span>Read only</span>
       </header>
       <textarea
         className="source-content"

@@ -3,6 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./compile-contract": {
+      "types": "./src/compiler/contract.ts"
+    }
+  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "typecheck": "tsc -p tsconfig.json",
@@ -11,6 +16,12 @@
     "start": "NODE_ENV=production node dist/main.js"
   },
   "dependencies": {
+    "@gamma-compose/ui": "workspace:*",
+    "@tailwindcss/oxide": "4.3.3",
+    "esbuild": "0.28.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwindcss": "4.3.3",
     "@hono/node-server": "^2.0.4",
     "hono": "^4.12.32"
   },

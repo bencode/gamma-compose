@@ -10,8 +10,8 @@ export const App = () => (
         element={
           <main className="not-found">
             <p className="font-mono">404</p>
-            <h1>这个页面不存在</h1>
-            <Link to="/">返回工作台</Link>
+            <h1>Page not found</h1>
+            <Link to="/">Back to workspace</Link>
           </main>
         }
       />
