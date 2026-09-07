@@ -6,6 +6,7 @@ type PreviewPanelProps = {
   state: PreviewState
   retry: () => void
   onMessage: (message: PreviewMessage) => void
+  retryDisabled?: boolean
 }
 
 const errorTitles = {
@@ -14,7 +15,12 @@ const errorTitles = {
   runtime: 'Page runtime error',
 }
 
-export const PreviewPanel = ({ state, retry, onMessage }: PreviewPanelProps) => {
+export const PreviewPanel = ({
+  state,
+  retry,
+  onMessage,
+  retryDisabled = false,
+}: PreviewPanelProps) => {
   const frame = useRef<HTMLIFrameElement>(null)
   const [document] = useState(createPreviewDocument)
   useEffect(() => {
@@ -41,6 +47,7 @@ export const PreviewPanel = ({ state, retry, onMessage }: PreviewPanelProps) => 
       {(state.status === 'loading' || state.status === 'ready') && (
         <>
           <iframe
+            key={state.buildId}
             ref={frame}
             title="Project preview"
             sandbox="allow-scripts"
@@ -85,7 +92,7 @@ export const PreviewPanel = ({ state, retry, onMessage }: PreviewPanelProps) => 
                 .join('\n\n')}
             </pre>
           </div>
-          <button type="button" className="preview-retry" onClick={retry}>
+          <button type="button" className="preview-retry" onClick={retry} disabled={retryDisabled}>
             Retry
           </button>
         </div>

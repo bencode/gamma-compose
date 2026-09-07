@@ -28,6 +28,7 @@ const packages = new Set([
   'react/jsx-dev-runtime',
   'react-dom',
   'react-dom/client',
+  'react-router-dom',
   '@gamma-compose/ui',
   '@gamma-compose/ui/styles.css',
 ])

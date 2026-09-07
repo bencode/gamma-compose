@@ -35,6 +35,9 @@ export const compileFiles = async (
     body: JSON.stringify(input),
     signal,
   })
+  if (response.status >= 500) {
+    throw new Error(`The compilation service failed (HTTP ${response.status}). Please retry.`)
+  }
   if (!response.headers.get('content-type')?.includes('application/json')) {
     throw new Error(`The compilation service returned an unexpected response (${response.status}).`)
   }

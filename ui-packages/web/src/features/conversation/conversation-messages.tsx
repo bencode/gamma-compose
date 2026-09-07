@@ -40,6 +40,20 @@ export const ConversationMessages = ({ messages, running }: ConversationMessages
           <p className="whitespace-pre-wrap text-[13px] leading-6 [overflow-wrap:anywhere]">
             {message.text}
           </p>
+          {Boolean(message.tools?.length) && (
+            <ul className="mt-2 space-y-1 text-xs text-muted" aria-label="Tool activity">
+              {message.tools?.map(tool => (
+                <li
+                  key={tool.id}
+                  className="flex flex-wrap gap-x-2 gap-y-1 [overflow-wrap:anywhere]"
+                >
+                  <span className="font-medium">{tool.name}</span>
+                  {tool.path && <span>{tool.path}</span>}
+                  <span>{tool.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {message.notice && (
             <p
               className="mt-2 text-xs text-muted [overflow-wrap:anywhere]"

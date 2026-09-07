@@ -51,7 +51,7 @@ const DirectoryEntries = ({ directory = '', ...props }: DirectoryEntriesProps) =
 export const FileBrowser = (props: FileBrowserProps) => (
   <section className="file-browser" aria-label="File browser">
     <nav className="file-navigation" aria-label="Project files">
-      <h2 className="file-navigation-title">Example files</h2>
+      <h2 className="file-navigation-title">Project files</h2>
       <DirectoryEntries {...props} />
     </nav>
     <section className="source-panel" aria-label="Source code">

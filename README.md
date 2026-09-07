@@ -4,20 +4,56 @@ A browser workbench for building React pages. Project files live in the browser;
 a stateless Node service compiles them into JavaScript and CSS, which run in an
 isolated preview.
 
-## Current iteration: Browser Agent and streaming chat
+## Current iteration: Template gallery and local projects
 
 - A resizable conversation panel and full-height preview or read-only file browser.
 - One project entry and a collection of text files submitted to the compiler.
 - React, built-in shadcn/Radix components, Tailwind CSS 4, and ordinary CSS bundled together.
 - A runnable team workspace with project search, a status filter, and a dialog.
+- A gallery with Blank, Team workspace, and Product showcase templates.
+- Independent browser-local projects with automatic IndexedDB file saving.
 - Compilation diagnostics, preview loading errors, runtime errors, and retry.
 - All project copy, comments, and documentation are in English.
 - A browser-side Pi Agent with multi-turn GLM Coding Plan chat, streaming replies, and Stop.
+- Browser-local `list`, `read`, `edit`, and `write` tools, plus explicit `compile`.
+- Agent file changes immediately appear in Files; successful compilation reloads Preview.
 
-The Agent can discuss React code but has no project tools yet. It cannot read,
-edit, or compile project files; the preview still runs the built-in example.
-Files and conversation drafts stay in memory; refreshing clears local state.
-There is no source editor, project persistence, Scene compiler, or module registry.
+The Agent can inspect and modify the selected project, create text files, and compile
+the current entry. Compile diagnostics return to the Agent for source repair.
+Writes do not automatically compile. Stop keeps completed changes and cancels
+active generation or compilation; it does not roll back files.
+Project files save automatically in IndexedDB. Conversation history and drafts
+remain in memory and clear when leaving the workbench or refreshing. Desktop
+panel proportions are saved separately in this browser's localStorage.
+There is no source editor, Scene compiler, or module registry.
+There is no search tool, shell, package installation, deletion, or rename tool.
+See [Agent project tools](docs/agent-project-tools.md) for the technical flow.
+
+## Gallery and local projects
+
+Open `/` to choose a template or an existing project. Choosing a template creates
+an independent copy and opens `/projects/:projectId`; choosing an existing project
+reopens it without copying. The workbench's back arrow returns to the gallery.
+
+The `gamma-compose` IndexedDB database (version 1) has `templates` and `projects`
+stores keyed by `id`. Templates are seeded only when the database is created.
+Each project stores its name, last-modified timestamp, entry and complete text
+file collection. Template updates do not overwrite existing browser data.
+
+Every valid file change submits a complete snapshot without a debounce. `Saved`
+means the latest snapshot's database transaction completed. On `Save failed`,
+changes remain in memory and Retry save resubmits them. Wait for `Saved` before
+closing the page; only committed changes survive a forced close. Reopening
+compiles the saved source again; compiled bundles are not persisted.
+
+Projects belong to this browser and origin. URLs do not share project data with
+other devices. Clearing site data removes projects; browser storage is not a cloud
+backup. Database failures are shown with retry, not hidden behind temporary projects.
+There is no chat persistence, rename/delete UI, export, history, or cross-tab collaboration.
+
+Blank and Product showcase use `MemoryRouter` inside the sandboxed preview.
+Preview navigation does not change the editor URL. Do not use `BrowserRouter`
+or `HashRouter` inside the preview; the host application uses its own BrowserRouter.
 
 ## Development
 
@@ -84,7 +120,10 @@ must survive. In browser network tools, confirm that no real provider key appear
 
 Automated tests use simulated model responses and local HTTP connections; they do
 not call the paid provider or replace these credential-dependent acceptance checks.
-The next iteration, 3B, will separately design project tools and the compile/repair loop.
+Ask the Agent to change the project table into cards while keeping search and the
+status filter. Confirm tool activity appears, inspect actual file changes, and test
+the refreshed preview. Compilation success alone does not verify browser behavior;
+preview runtime errors are displayed to the user, not fed back to the Agent.
 
 ## Checks and production
 
@@ -136,7 +175,7 @@ Limits and resolution:
 - File keys must be canonical project-relative paths.
 - Local TS, TSX, JS, JSX, JSON, and CSS imports resolve only inside the submitted file collection.
 - Direct package imports: react, react/jsx-runtime, react/jsx-dev-runtime,
-  react-dom, react-dom/client, @gamma-compose/ui, and @gamma-compose/ui/styles.css.
+  react-dom, react-dom/client, react-router-dom, @gamma-compose/ui, and @gamma-compose/ui/styles.css.
 - CSS may import tailwindcss. Built-in component dependencies come from the installed workspace.
 - Unknown packages, remote modules, filesystem escapes, custom Tailwind plugins,
   JavaScript configuration, and @source directory scanning are rejected.
@@ -177,6 +216,9 @@ code and is not a complete public multi-tenant execution service.
 
 Switching Preview and Files keeps the loaded iframe mounted. Desktop resizing
 keeps both panels at least 180px wide, with a default conversation width of 360px.
+After resizing, desktop panel proportions are restored on refresh at the same
+origin. Only user resizing saves the preference; mobile layouts do not read or
+overwrite it. Unavailable storage or invalid saved layouts fall back to defaults.
 Below 900px the layout becomes vertical; changing across that breakpoint can
 remount the preview, while preserving the compiled result, draft, and file selection.
 
@@ -193,7 +235,7 @@ remount the preview, while preserving the compiled result, draft, and file selec
 
 ## Manual acceptance
 
-1. Open the workspace and confirm the example compiles and displays.
+1. Open the gallery and create a Team workspace project; confirm it compiles and displays.
 2. Search projects, change the status filter, and open/close the dialog using the keyboard.
 3. Switch to Files, inspect the entry and component source, then return to Preview.
    The search and filter state should remain unchanged.
@@ -202,6 +244,11 @@ remount the preview, while preserving the compiled result, draft, and file selec
 6. Check a 390px viewport and narrow desktop panels for overflow.
 7. Exercise compilation and runtime failures; confirm an English error and a working retry.
 8. Start the production build and verify compilation without a development server.
+9. Ask the Agent to change the page, wait for Saved, refresh the project URL, and
+   verify the modified files return while the conversation is empty.
+10. Return to the gallery, reopen the project, then create another from the same
+    template. Verify the original project and the template are unchanged.
+11. Create Blank and Product showcase projects; check Hello and the expandable FAQ.
 
 GET /api/health remains a diagnostic endpoint; the UI does not poll it.
 Unknown /api routes return JSON 404. Unknown application routes show a not-found
@@ -209,6 +256,5 @@ page; missing static assets return HTTP 404.
 
 ## Next iterations
 
-1. Iteration 3B: browser project tools, compilation, and the Agent repair loop.
-2. Scene JSON-to-TSX compilation and independently compiled entries, after separate design review.
-3. Local persistence, export, and deployment capabilities, after separate design review.
+1. Scene JSON-to-TSX compilation and independently compiled entries, after separate design review.
+2. Export and deployment capabilities, after separate design review.

@@ -107,7 +107,8 @@ A runnable React example with searchable projects and a status filter.
 The entry is src/main.tsx. Local imports resolve from this file collection.
 Built-in components come from @gamma-compose/ui.
 
-The file browser is read-only. Agent editing is not connected yet.
+The file browser is read-only. Ask the Agent to edit files and compile the page.
+Project files save automatically in this browser; conversation history does not persist.
 `,
 }
 

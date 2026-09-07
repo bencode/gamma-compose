@@ -16,7 +16,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-resizable-panels": "^4.12.3",
-    "react-router-dom": "^7.9.5"
+    "react-router-dom": "^7.9.5",
+    "typebox": "1.3.7"
   },
   "devDependencies": {
     "@gamma-compose/server": "workspace:*",
@@ -28,6 +29,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.1",
     "@vitejs/plugin-react": "^5.0.4",
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^27.0.0",
     "tailwindcss": "^4.1.16",
     "typescript": "~5.9.3",

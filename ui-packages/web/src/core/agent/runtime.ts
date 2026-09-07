@@ -2,22 +2,28 @@ import { Agent } from '@earendil-works/pi-agent-core'
 import { createModels } from '@earendil-works/pi-ai'
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn'
 import type { AgentConfig } from '@gamma-compose/server/agent-contract'
+import type { ProjectStore } from '../project/store'
+import { type CompileProject, createCompileTool } from './compile-tool'
+import { createFileTools } from './file-tools'
+import { systemPrompt } from './system-prompt'
 
-export const createConversationAgent = (config: Extract<AgentConfig, { enabled: true }>) => {
+export const createConversationAgent = (
+  config: Extract<AgentConfig, { enabled: true }>,
+  project: ProjectStore,
+  compile: CompileProject,
+) => {
   const models = createModels()
   models.setProvider(zaiCodingCnProvider())
   const model = models.getModel(config.provider, config.modelId)
   if (!model) throw new Error(`Unsupported GLM Coding Plan model: ${config.modelId}`)
 
   return new Agent({
+    toolExecution: 'sequential',
     initialState: {
       model: { ...model, baseUrl: new URL('/api/agent', window.location.origin).href },
-      systemPrompt:
-        'You are the Gamma Compose assistant. Help the user discuss React pages and components. ' +
-        'You currently have no tools and cannot inspect, modify, compile or run project files. ' +
-        'Do not claim that you have performed those actions.',
+      systemPrompt,
       thinkingLevel: 'low',
-      tools: [],
+      tools: [...createFileTools(project), createCompileTool(compile)],
     },
     streamFn: (currentModel, context, options) =>
       models.streamSimple(currentModel, context, {

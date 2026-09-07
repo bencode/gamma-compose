@@ -4,6 +4,21 @@ import { describe, expect, it } from 'vitest'
 import { compileProject } from './compile.js'
 
 describe('project compilation', () => {
+  it('bundles React Router from the approved package without a browser history dependency', async () => {
+    const result = await compileProject({
+      entry: 'main.ts',
+      files: {
+        'main.ts':
+          "import { matchRoutes } from 'react-router-dom'; export const route = matchRoutes([{ path: '/hello' }], '/hello')?.[0]?.route.path",
+      },
+    })
+    if (!result.ok) throw new Error(result.errors.map(error => error.message).join('\n'))
+    const module = { exports: {} as { route: string } }
+    const { code } = await transform(result.js, { format: 'cjs' })
+    runInNewContext(code, { module, exports: module.exports, URL })
+    expect(module.exports.route).toBe('/hello')
+  })
+
   it('bundles local modules, built-in UI, Tailwind utilities and project CSS', async () => {
     const result = await compileProject({
       entry: 'src/main.tsx',
