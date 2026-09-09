@@ -68,6 +68,7 @@ const mobileLayoutStorage: LayoutStorage = {
 }
 
 type WorkbenchProps = {
+  projectId: string
   project: ProjectStore
   projectName: string
   saveStatus: 'saving' | 'saved' | 'error'
@@ -76,6 +77,7 @@ type WorkbenchProps = {
 }
 
 export const Workbench = ({
+  projectId,
   project,
   projectName,
   saveStatus,
@@ -83,8 +85,8 @@ export const Workbench = ({
   onRetrySave,
 }: WorkbenchProps) => {
   const snapshot = useSyncExternalStore(project.subscribe, project.getSnapshot)
-  const preview = usePreview(project)
-  const conversation = useConversation(project, preview.compile)
+  const preview = usePreview(projectId, project)
+  const conversation = useConversation(projectId, project, preview)
   const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot)
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: 'gamma-compose-workbench-desktop',

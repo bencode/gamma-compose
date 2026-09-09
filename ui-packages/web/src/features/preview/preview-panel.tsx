@@ -6,6 +6,7 @@ type PreviewPanelProps = {
   state: PreviewState
   retry: () => void
   onMessage: (message: PreviewMessage) => void
+  openDatabaseBridge: (port: MessagePort) => () => void
   retryDisabled?: boolean
 }
 
@@ -19,9 +20,11 @@ export const PreviewPanel = ({
   state,
   retry,
   onMessage,
+  openDatabaseBridge,
   retryDisabled = false,
 }: PreviewPanelProps) => {
   const frame = useRef<HTMLIFrameElement>(null)
+  const closeDatabaseBridge = useRef<() => void>(undefined)
   const [document] = useState(createPreviewDocument)
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
@@ -36,45 +39,58 @@ export const PreviewPanel = ({
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
   }, [onMessage])
+  useEffect(
+    () => () => {
+      closeDatabaseBridge.current?.()
+    },
+    [],
+  )
+
+  const renderPreview = () => {
+    if (!state.frame) return
+    closeDatabaseBridge.current?.()
+    const channel = new MessageChannel()
+    closeDatabaseBridge.current = openDatabaseBridge(channel.port1)
+    frame.current?.contentWindow?.postMessage(
+      { type: 'preview:render', js: state.frame.result.js, css: state.frame.result.css },
+      '*',
+      [channel.port2],
+    )
+  }
 
   return (
     <section className="preview-surface" aria-label="Page preview">
-      {state.status === 'compiling' && (
+      {(state.status === 'compiling' || state.status === 'compiled') && (
         <p className="preview-progress" role="status">
-          Compiling preview…
+          {state.status === 'compiling' ? 'Compiling preview…' : 'Build ready…'}
         </p>
       )}
-      {(state.status === 'loading' || state.status === 'ready') && (
+      {state.frame && (
         <>
           <iframe
-            key={state.buildId}
+            key={state.frame.buildId}
             ref={frame}
             title="Project preview"
             sandbox="allow-scripts"
             srcDoc={document}
             className="preview-frame"
-            onLoad={() =>
-              frame.current?.contentWindow?.postMessage(
-                { type: 'preview:render', js: state.result.js, css: state.result.css },
-                '*',
-              )
-            }
+            onLoad={renderPreview}
           />
           {state.status === 'loading' && (
             <p className="preview-progress" role="status">
               Loading preview…
             </p>
           )}
-          {state.result.warnings.length > 0 && (
+          {state.frame.result.warnings.length > 0 && (
             <details className="preview-warnings">
-              <summary>Compilation warnings ({state.result.warnings.length})</summary>
-              <pre>{state.result.warnings.map(warning => warning.message).join('\n\n')}</pre>
+              <summary>Compilation warnings ({state.frame.result.warnings.length})</summary>
+              <pre>{state.frame.result.warnings.map(warning => warning.message).join('\n\n')}</pre>
             </details>
           )}
         </>
       )}
       {state.status === 'error' && (
-        <div className="preview-error">
+        <div className="preview-error absolute inset-0 bg-panel">
           <div role="alert">
             <h2>{errorTitles[state.phase]}</h2>
             <pre>

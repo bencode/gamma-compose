@@ -12,6 +12,7 @@ const Workbench = () => {
   return (
     <MemoryRouter>
       <WorkbenchView
+        projectId="test-project"
         project={project}
         projectName="Team workspace"
         saveStatus="saved"
@@ -155,6 +156,11 @@ describe('workbench', () => {
           }),
           { headers: { 'Content-Type': 'text/event-stream' } },
         )
+      if (modelRequests === 3)
+        return new Response(
+          'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"refresh","type":"function","function":{"name":"refresh_preview","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        )
       return new Response(
         'data: {"choices":[{"index":0,"delta":{"content":"Compiled."},"finish_reason":"stop"}]}\n\n',
         { headers: { 'Content-Type': 'text/event-stream' } },
@@ -180,12 +186,23 @@ describe('workbench', () => {
       )
       finish?.close()
     })
-    await screen.findByText('Compiled.')
+    await waitFor(() => expect(screen.getByTitle('Project preview')).not.toBe(frame))
+    const refreshedFrame = screen.getByTitle<HTMLIFrameElement>('Project preview')
+    act(() => {
+      fireEvent(
+        window,
+        new MessageEvent('message', {
+          source: refreshedFrame.contentWindow,
+          data: { type: 'preview:loaded' },
+        }),
+      )
+    })
+    await screen.findByText('Compiled.', undefined, { timeout: 2_000 })
     expect(compileInputs).toHaveLength(2)
     expect(JSON.parse(compileInputs[1] ?? '{}').files['src/app.tsx']).toBe(updated)
     await user.click(screen.getByRole('tab', { name: 'Preview' }))
-    expect(screen.getByTitle('Project preview')).not.toBe(frame)
-    expect(modelRequests).toBe(3)
+    expect(screen.getByTitle('Project preview')).toBe(refreshedFrame)
+    expect(modelRequests).toBe(4)
   })
 
   it('shows the selected file as read-only source', async () => {

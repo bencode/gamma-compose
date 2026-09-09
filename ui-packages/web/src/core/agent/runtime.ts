@@ -3,27 +3,51 @@ import { createModels } from '@earendil-works/pi-ai'
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn'
 import type { AgentConfig } from '@gamma-compose/server/agent-contract'
 import type { ProjectStore } from '../project/store'
+import { builtInSkillFiles, builtInSkills } from './builtin-skills'
 import { type CompileProject, createCompileTool } from './compile-tool'
+import { createDbTools } from './db-tools'
 import { createFileTools } from './file-tools'
-import { systemPrompt } from './system-prompt'
+import {
+  createPreviewTools,
+  type ReadPreviewConsole,
+  type ReadPreviewErrors,
+} from './preview-tools'
+import { createProjectEnv } from './project-env'
+import { createRefreshTool, type RefreshPreview } from './refresh-tool'
+import { createSystemPrompt } from './system-prompt'
+
+export type AgentPreview = {
+  compile: CompileProject
+  refresh: RefreshPreview
+  readErrors: ReadPreviewErrors
+  readConsole: ReadPreviewConsole
+}
 
 export const createConversationAgent = (
   config: Extract<AgentConfig, { enabled: true }>,
+  projectId: string,
   project: ProjectStore,
-  compile: CompileProject,
+  preview: AgentPreview,
 ) => {
   const models = createModels()
   models.setProvider(zaiCodingCnProvider())
   const model = models.getModel(config.provider, config.modelId)
   if (!model) throw new Error(`Unsupported GLM Coding Plan model: ${config.modelId}`)
 
+  const env = createProjectEnv(project, builtInSkillFiles)
   return new Agent({
     toolExecution: 'sequential',
     initialState: {
       model: { ...model, baseUrl: new URL('/api/agent', window.location.origin).href },
-      systemPrompt,
+      systemPrompt: createSystemPrompt(builtInSkills),
       thinkingLevel: 'low',
-      tools: [...createFileTools(project), createCompileTool(compile)],
+      tools: [
+        ...createFileTools(project, env),
+        ...createDbTools(projectId, project),
+        createCompileTool(preview.compile),
+        createRefreshTool(preview.refresh),
+        ...createPreviewTools(preview.readErrors, preview.readConsole),
+      ],
     },
     streamFn: (currentModel, context, options) =>
       models.streamSimple(currentModel, context, {

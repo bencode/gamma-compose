@@ -68,6 +68,12 @@ Initialize outside React rendering and share the instance through an ordinary mo
 
 The model must include `id`, but callers cannot submit or modify it. The runtime generates it with `crypto.randomUUID()`; use a secure browser context such as HTTPS or localhost. `get` returns `undefined` for a missing record. `remove` succeeds even if the record is already absent.
 
+Inside a Gamma Compose generated application, use the logical database name `app`.
+The compiler substitutes the package's preview client, while the workbench host runs
+the native implementation against the current project's IndexedDB namespace. The
+same function API is available in both environments. Resource definitions remain
+ordinary imported JSON; they are not discovered implicitly by application code.
+
 ## Validation and model changes
 
 Models use a documented subset of JSON Schema 2020-12. Ajv compiles each model during initialization and validates complete records before `create` and `update` commit. Unknown fields in submitted input are rejected, not silently stripped; values are not coerced or filled with defaults. Updates replace submitted top-level fields, including entire nested objects or arrays.
@@ -81,6 +87,11 @@ Reads do not validate or clean historical records. On `update`, the library reta
 - Same-origin application code is the trust boundary, not the database name. This package is not an isolation mechanism for untrusted code.
 - IndexedDB persistence is subject to browser storage policies and user deletion. It is not a backup or a guarantee against eviction.
 - Queries use indexes for direct equality candidates, otherwise scan the resource and filter/sort in memory. This is intended for local applications, not unbounded datasets.
-- No joins, cascades, subscriptions, cross-call transactions, React hooks, or Agent integration are included.
+- No joins, cascades, subscriptions, cross-call transactions, or React hooks are included.
+
+The package ships `skills/local-db/SKILL.md` for Gamma Compose's browser Agent and
+exports host bridge and preview-client entry points for workbench integration. These
+integration entries are infrastructure APIs; generated applications should import
+only `@gamma-compose/local-db`.
 
 See the [complete protocol](../../docs/local-db.md) in this repository for supported schema keywords, query behavior, lifecycle, and error codes.

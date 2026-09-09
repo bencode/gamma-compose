@@ -3,16 +3,23 @@ import { compileFiles } from '../compile/client'
 import { demoProject } from '../project/demo-project'
 import { createProjectStore } from '../project/store'
 import { createCompileTool } from './compile-tool'
-import { createConversationAgent } from './runtime'
+import { type AgentPreview, createConversationAgent } from './runtime'
 
 const config = { enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' } as const
+const createPreview = (changes: Partial<AgentPreview> = {}): AgentPreview => ({
+  compile: async () => ({ ok: true, js: '', css: '', warnings: [] }),
+  refresh: async () => ({ refreshed: true, buildId: 1 }),
+  readErrors: () => ({ buildId: 1, status: 'ready', errors: [], dropped: 0 }),
+  readConsole: () => ({ buildId: 1, entries: [], dropped: 0 }),
+  ...changes,
+})
 const createAgent = (modelConfig = config) =>
-  createConversationAgent(modelConfig, createProjectStore(demoProject), async () => ({
-    ok: true,
-    js: '',
-    css: '',
-    warnings: [],
-  }))
+  createConversationAgent(
+    modelConfig,
+    'test-project',
+    createProjectStore(demoProject),
+    createPreview(),
+  )
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
   `data: ${JSON.stringify({ id: 'completion', choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`
 const reply = () =>
@@ -111,13 +118,23 @@ describe('browser Pi runtime', () => {
           },
           { name: 'compile', arguments: {} },
         ])
+      if (payloads.length === 3) return toolReply([{ name: 'refresh_preview', arguments: {} }])
       return reply()
     })
-    const agent = createConversationAgent(config, project, signal =>
-      compileFiles(project.getSnapshot(), signal ?? new AbortController().signal),
+    const refresh = vi.fn(async () => ({ refreshed: true as const, buildId: 1 }))
+    const agent = createConversationAgent(
+      config,
+      'test-project',
+      project,
+      createPreview({
+        compile: signal =>
+          compileFiles(project.getSnapshot(), signal ?? new AbortController().signal),
+        refresh,
+      }),
     )
     await agent.prompt('Update the value and compile.')
     expect(compilations).toBe(2)
+    expect(refresh).toHaveBeenCalledOnce()
     expect(project.getSnapshot().files['src/main.tsx']).toBe('export const value = 2')
     expect(agent.state.messages).toEqual(
       expect.arrayContaining([
@@ -136,8 +153,61 @@ describe('browser Pi runtime', () => {
       ]),
     )
     expect(payloads[1]).toContain('Unexpected end of file')
-    expect(payloads[2]).toContain('previewRefreshRequested')
+    expect(payloads[2]).toContain('refreshRequired')
+    expect(payloads[3]).toContain('refreshed')
     expect(JSON.stringify([payloads, agent.state.messages])).not.toContain('MUST_STAY_IN_PREVIEW')
+  })
+
+  it('feeds preview initialization errors back to Pi before the model finishes', async () => {
+    const payloads: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      payloads.push(String(init?.body))
+      if (payloads.length === 1)
+        return new Response(
+          `${event(
+            {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'refresh-failed',
+                  type: 'function',
+                  function: { name: 'refresh_preview', arguments: '{}' },
+                },
+              ],
+            },
+            'tool_calls',
+          )}data: [DONE]\n\n`,
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        )
+      return reply()
+    })
+    const refresh = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          'Indexes require distinct string or numeric fields with identifier names, not paths.',
+        ),
+      )
+    const agent = createConversationAgent(
+      config,
+      'test-project',
+      createProjectStore(demoProject),
+      createPreview({ refresh }),
+    )
+    await agent.prompt('Refresh the preview.')
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(agent.state.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'refresh_preview',
+          isError: true,
+          content: [{ type: 'text', text: expect.stringContaining('Indexes require distinct') }],
+        }),
+      ]),
+    )
+    expect(payloads).toHaveLength(2)
+    expect(payloads[1]).toContain('Indexes require distinct')
   })
 
   it('distinguishes service failures and bounds model-visible diagnostics', async () => {
@@ -167,6 +237,7 @@ describe('browser Pi runtime', () => {
       return reply()
     })
     const agent = createAgent()
+    expect(agent.state.systemPrompt).toContain('/project/.gamma/skills/local-db/SKILL.md')
     await agent.prompt('First question')
     await agent.prompt('Second question')
     expect(requests).toHaveLength(2)
@@ -199,8 +270,17 @@ describe('browser Pi runtime', () => {
       'read',
       'edit',
       'write',
+      'db_get',
+      'db_list',
+      'db_create',
+      'db_update',
+      'db_remove',
       'compile',
+      'refresh_preview',
+      'read_preview_errors',
+      'read_preview_console',
     ])
+    expect(agent.state.tools.find(tool => tool.name === 'db_get')?.label).toBe('db.get')
   })
 
   it('keeps partial text on abort, settles before reuse and excludes the aborted answer from replay', async () => {
@@ -269,8 +349,9 @@ describe('browser Pi runtime', () => {
     expect(() =>
       createConversationAgent(
         { ...config, modelId: 'unknown' },
+        'test-project',
         createProjectStore(demoProject),
-        vi.fn(),
+        createPreview(),
       ),
     ).toThrow('Unsupported GLM')
   })

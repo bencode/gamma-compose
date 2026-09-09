@@ -7,9 +7,16 @@ import { ConversationPanel } from './conversation-panel'
 import { useConversation } from './use-conversation'
 
 const compile = async () => ({ ok: true as const, js: '', css: '', warnings: [] })
+const refresh = async () => ({ refreshed: true as const, buildId: 1 })
+const preview = {
+  compile,
+  refresh,
+  readErrors: () => ({ buildId: 1, status: 'ready' as const, errors: [], dropped: 0 }),
+  readConsole: () => ({ buildId: 1, entries: [], dropped: 0 }),
+}
 const ConnectedConversation = () => {
   const [project] = useState(() => createProjectStore(demoProject))
-  return <ConversationPanel {...useConversation(project, compile)} />
+  return <ConversationPanel {...useConversation('test-project', project, preview)} />
 }
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
   new TextEncoder().encode(

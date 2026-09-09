@@ -79,6 +79,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
   if (loaded)
     return (
       <Workbench
+        projectId={loaded.record.id}
         project={loaded.project}
         projectName={loaded.record.name}
         saveStatus={saveStatus}

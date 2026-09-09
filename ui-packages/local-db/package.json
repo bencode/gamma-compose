@@ -4,12 +4,29 @@
   "type": "module",
   "files": [
     "dist",
+    "src",
+    "skills",
     "README.md"
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./bridge": {
+      "types": "./src/bridge-host.ts",
+      "development": "./src/bridge-host.ts",
+      "import": "./dist/bridge-host.js"
+    },
+    "./preview": {
+      "types": "./src/preview.ts",
+      "source": "./src/preview.ts",
+      "development": "./src/preview.ts",
+      "import": "./dist/preview.js"
+    },
+    "./skills/local-db": {
+      "default": "./skills/local-db/SKILL.md"
     }
   },
   "sideEffects": false,

@@ -20,7 +20,7 @@ export const createCompileTool = (
   name: 'compile',
   label: 'compile',
   description:
-    'Compile the current project and request a preview refresh on success. Returns compilation diagnostics on failure. Does not verify runtime behavior or interactions.',
+    'Compile the current project. On success, call refresh_preview next to load it. Returns compilation diagnostics on failure.',
   parameters,
   executionMode: 'sequential',
   execute: async (_id, _args, signal) => {
@@ -51,7 +51,7 @@ export const createCompileTool = (
           type: 'text',
           text: modelText({
             compiled: true,
-            previewRefreshRequested: true,
+            refreshRequired: true,
             warnings: result.warnings,
           }),
         },

@@ -19,6 +19,7 @@
     "start": "NODE_ENV=production node dist/main.js"
   },
   "dependencies": {
+    "@gamma-compose/local-db": "workspace:*",
     "@gamma-compose/ui": "workspace:*",
     "@hono/node-server": "^2.0.4",
     "@tailwindcss/oxide": "4.3.3",

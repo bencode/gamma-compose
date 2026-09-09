@@ -42,6 +42,20 @@ describe('project compilation', () => {
     expect(result.css).toContain('.project-heading')
   }, 15000)
 
+  it('maps the local database import to the sandbox preview client', async () => {
+    const result = await compileProject({
+      entry: 'src/main.ts',
+      files: {
+        'src/main.ts':
+          "import { openLocalDb } from '@gamma-compose/local-db'; export const open = openLocalDb",
+      },
+    })
+    if (!result.ok) throw new Error(result.errors.map(error => error.message).join('\n'))
+    expect(result.js).toContain('__GAMMA_COMPOSE_LOCAL_DB_PORT__')
+    expect(result.js).not.toContain('indexedDB')
+    expect(result.js).not.toContain('Runtime compilation requires CSP')
+  })
+
   it.each([
     ["import './missing'", 'File not found'],
     ["import '../../private.ts'", 'escape the project'],

@@ -1,4 +1,4 @@
-# Local database protocol — iteration 1
+# Local database protocol
 
 `@gamma-compose/local-db` runs in the browser. JSON models describe records; applications compose asynchronous CRUD functions and own all relationships and business rules. No HTTP protocol is involved.
 
@@ -123,4 +123,31 @@ The native database version tracks physical layout only. `protocolVersion` track
 
 The runtime requires IndexedDB and secure-context UUID generation. Ajv's browser runtime compilation requires CSP `script-src` to allow `'unsafe-eval'`; see [Ajv security guidance](https://ajv.js.org/security.html). The package does not relax CSP or fetch external schemas. Strict-CSP precompiled validators are out of scope. Models are application configuration, not executable JavaScript, but model compilation still consumes browser CPU and memory; the library is not a sandbox for arbitrarily large hostile inputs.
 
-Iteration 1 excludes preview bridge integration, automatic resource-file discovery, Agent skills/tools and React bindings. The host application imports model files and calls `openLocalDb` explicitly.
+## Gamma Compose integration
+
+Project resource definitions are direct files matching `data/*.resource.json`.
+Application code imports those JSON files explicitly and opens one logical database:
+
+```ts
+import { openLocalDb } from '@gamma-compose/local-db'
+import tasks from './data/tasks.resource.json'
+
+export const db = await openLocalDb({ databaseName: 'app', resources: [tasks] })
+```
+
+Compiled preview code does not receive the native IndexedDB implementation. The
+compiler resolves the package import to a MessagePort client. The opaque-origin
+iframe sends CRUD requests to the host, where the native package opens the physical
+database `gamma-compose:local-db:project:<projectId>`. Ajv compilation and IndexedDB access therefore stay
+in the host application. The bridge does not relax the iframe sandbox or CSP.
+
+The Agent receives `db_get`, `db_list`, `db_create`, `db_update`, and `db_remove`.
+Each call reads the latest resource definitions, operates on the same physical
+project database, and closes its handle. Model-visible results are bounded to
+50 KiB. Source changes require `compile` followed by `refresh_preview`; database-only
+changes require only `refresh_preview`, using the latest current-source artifact.
+
+The package also ships `skills/local-db/SKILL.md`. Gamma Compose registers it as a
+Pi skill and exposes it at `/project/.gamma/skills/local-db/SKILL.md` as a read-only
+virtual file. React bindings, subscriptions, migrations, server storage, relations,
+and business-rule execution remain out of scope.

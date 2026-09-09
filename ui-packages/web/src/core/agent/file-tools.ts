@@ -1,3 +1,4 @@
+import type { ExecutionEnv } from '@earendil-works/pi-agent-core'
 import {
   type AgentHarnessTool,
   type AgentTool,
@@ -28,8 +29,11 @@ const bindTool = <P extends TSchema, D>(
   },
 })
 
-export const createFileTools = (project: ProjectStore) => {
-  const context = { env: createProjectEnv(project) }
+export const createFileTools = (
+  project: ProjectStore,
+  env: ExecutionEnv = createProjectEnv(project),
+) => {
+  const context = { env }
   const read = bindTool(createReadTool(), context)
   const listSchema = Type.Object({
     path: Type.Optional(

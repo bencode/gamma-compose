@@ -1,6 +1,6 @@
 # Agent project tools
 
-Iteration 3B connects the browser Pi Agent to the current React project. The Agent
+The browser project integration connects Pi to the current React project. The Agent
 loop, conversation, tools and project state run in the browser. The server retains
 its existing stateless model proxy and compilation endpoints.
 
@@ -41,7 +41,15 @@ publishes once after Pi has validated all replacements. Stop does not undo write
 | `read` | `{ path: string, offset?: number, limit?: number }` | Text, with Pi's range and truncation guidance |
 | `edit` | `{ path: string, edits: { oldText: string, newText: string }[] }` | Pi's replacement confirmation |
 | `write` | `{ path: string, content: string }` | Pi's create/overwrite confirmation |
+| `db_get` | `{ resource: string, id: string }` | One record or `null` |
+| `db_list` | `{ resource: string, query?: ListQuery }` | A page of records |
+| `db_create` | `{ resource: string, data: object }` | The committed record or a bounded commit summary |
+| `db_update` | `{ resource: string, id: string, changes: object }` | The committed record or a bounded commit summary |
+| `db_remove` | `{ resource: string, id: string }` | Removal confirmation |
 | `compile` | `{}` | Compilation confirmation and warnings, or error diagnostics |
+| `refresh_preview` | `{}` | Confirmation after the new iframe reports that its module loaded |
+| `read_preview_errors` | `{}` | Current build status and captured load/runtime errors |
+| `read_preview_console` | `{}` | Captured console output for the current build |
 
 `list` recursively lists every file by default, without reading content. `path`
 restricts it to a directory. Its output is a flat list, not an ASCII tree; the file
@@ -62,6 +70,23 @@ there are no symlinks. Unsupported filesystem operations return `not_supported`;
 shell execution returns `shell_unavailable`. No tool accesses the host filesystem.
 Pi's native per-file mutation queue is retained, and tools execute sequentially.
 
+The local database skill is available to Pi as the read-only virtual file
+`/project/.gamma/skills/local-db/SKILL.md`. It is included in the system prompt as
+a Pi skill, but it is not project source, does not appear in `list`, and cannot be
+overwritten by file tools. The skill documents resource files, application calls,
+Agent database tools, and the compile/refresh workflow.
+
+Database tools load direct `data/*.resource.json` files from the latest project
+snapshot for every operation. They pass `project:<projectId>` to the native package,
+which opens `gamma-compose:local-db:project:<projectId>`. Each tool executes one
+operation and closes its handle. The generated application
+uses the logical database name `app`; the host maps it to the same physical project
+database. Thus the Agent and preview share records without exposing another
+project's namespace. Tool results are capped at 50 KiB. Oversized reads fail with
+guidance to narrow the query; an oversized successful create or update returns a
+small `{ committed: true, id, recordOmitted }` result so the committed write is not
+misreported as a failure.
+
 The UI shows tool names, target paths and execution status. It does not render
 file contents, write arguments or edit diffs in the conversation. File contents
 returned by tools are visible to the model provider through the existing proxy.
@@ -78,18 +103,30 @@ User request -> Pi file tools -> current project snapshot
                                -> explicit compile tool
                                   -> POST /api/compile
                                      -> failure: Pi tool error -> model repair
-                                     -> success: new preview iframe + model confirmation
+                                     -> success: cache artifact
+                                        -> explicit refresh_preview
+                                           -> new iframe reports preview:loaded
+
+User request -> Pi database tools -> host-owned project IndexedDB
+                                  -> explicit refresh_preview using current artifact
+
+User reports broken behavior -> read_preview_errors + read_preview_console
+                             -> repair source -> compile -> refresh_preview
 ```
 
 `core/agent/system-prompt.ts` describes the entry, supported package imports,
 built-in component composition and the read/edit/compile workflow. It does not
 duplicate source files in every model request. The model discovers files with tools.
 
-`usePreview` automatically compiles the loaded project. Later file changes do not
-trigger compilation. Its stable `compile(signal?)` command reads the latest store
-snapshot; the Agent and manual Retry use the same command. Retry is disabled during
-an Agent run. Every successful build gets a new iframe key, so React batching cannot
-leave a previously loaded module in place.
+`usePreview` automatically compiles and refreshes the loaded project. Later file
+changes do not trigger either action. Its stable `compile(signal?)` command reads
+the latest store snapshot and caches the successful artifact without replacing the
+iframe. `refresh(signal?)` requires that artifact to match the current snapshot,
+creates a new iframe key, and resolves only after the source-checked
+`preview:loaded` message followed by a one-second initialization stability window.
+A load or runtime error during that window rejects the refresh and returns to Pi as
+a tool error. Manual Retry composes compile and refresh; Retry is disabled during
+an Agent run. Refresh has a 15-second module-loading timeout.
 
 Compile failure throws a model-visible error containing `phase: "compile"` and
 the existing diagnostics (`message`, optional `path`, one-based `line` and `column`).
@@ -101,33 +138,68 @@ retain their input-error diagnostics. The prompt tells the model not to treat
 service failures as broken source. Diagnostic text is capped at 50 KiB with an explicit
 truncation notice. The preview retains the complete compiler diagnostics.
 
-Success returns only `compiled: true`, `previewRefreshRequested: true`, and
-`warnings`. JavaScript and CSS go only to the preview, never to tool content or
-details. The tool does not wait for iframe lifecycle messages. Compilation does not
-include full TypeScript checking, runtime observation or interaction testing.
+Compile success returns only `compiled: true`, `refreshRequired: true`, and
+`warnings`. JavaScript and CSS remain in preview state, never in tool content or
+details. `refresh_preview` returns `{ refreshed: true, buildId }` after module load.
+It may also be called after database-only changes because no source compilation is
+needed. A successful result also means no reported error occurred during the
+one-second initialization window. It does not provide full TypeScript checking,
+DOM inspection, or interaction testing.
+
+Each refresh starts a new host-owned diagnostics buffer for that build. The iframe
+forwards `console.debug`, `console.log`, `console.info`, `console.warn`, and
+`console.error`, plus uncaught window errors, unhandled promise rejections, module
+load failures, and Content Security Policy violations. A document-level submit
+guard prevents unhandled native form navigation and reports an actionable runtime
+error; application handlers that synchronously call `preventDefault()` remain
+valid. This keeps `sandbox="allow-scripts"` and the existing CSP intact instead of
+granting form or origin permissions.
+
+`read_preview_errors` returns `{ buildId, status, errors, dropped }`, where status
+is `not-loaded`, `loading`, `ready`, or `failed`. `read_preview_console` returns
+`{ buildId, entries, dropped }`. Error and console records have a shared monotonic
+sequence number, timestamp, and structured source or level. They are separate,
+read-only tools: neither compiles, refreshes, edits files, nor starts another model
+turn. Buffers retain only the current build, cap each channel at 100 records and
+40 KiB, and report discarded records through `dropped`.
+
+Fatal load/runtime errors continue to drive the existing preview overlay and reject
+an in-progress refresh. CSP reports are diagnostic but nonfatal. Browser-internal
+DevTools messages are not assumed to be observable; explicit iframe instrumentation
+covers the supported classes above. The system prompt tells the Agent to call both
+diagnostic tools when the user reports an error, inert control, or unexpected
+behavior before editing. If the result is insufficient, the Agent may add focused
+console output, ask the user to reproduce once, read the next build's output, and
+remove temporary logging after the repair. Empty buffers are not proof that an
+interaction works.
 
 Cancellation reaches the compilation fetch, displays `Compilation cancelled.`, and
 allows a later Retry. Cancelled or superseded requests cannot publish late results.
-The existing iframe error channel remains UI-only. There is no automatic repair
-budget in this iteration; the user can Stop the Agent.
+There is no automatic repair turn or budget in this iteration; the user initiates
+the diagnostic loop through a normal conversation message and can Stop the Agent.
 
-The compiler additionally allows `react-router-dom` from its installed dependencies.
+The compiler additionally allows `react-router-dom` and `@gamma-compose/local-db`
+from its installed dependencies. The local database import resolves to a small
+sandbox client; IndexedDB and Ajv are not bundled into or executed by the opaque-origin
+iframe. Instead, a transferred `MessagePort` carries typed CRUD requests to a
+host-owned bridge. The iframe retains `sandbox="allow-scripts"` and the existing CSP.
 Preview routes use MemoryRouter, independently of the host BrowserRouter. The bundle
-still contains a single entry and its dependencies; external modules and iframe
-permissions are unchanged. Gallery thumbnails are static screenshots of the templates,
+still contains a single entry and its dependencies. Gallery thumbnails are static screenshots of the templates,
 not live compiler requests for every card.
 
 ## Verification
 
-Tests execute the actual Pi file tools against the browser adapter, cover rejected
-writes and partial-edit safety, and simulate a model making an invalid edit,
-receiving a compile error, repairing it and compiling successfully. UI tests cover
-file synchronization, explicit compilation, frame reloads, cancellation, tool
-activity, and existing conversation continuity.
+Tests execute the actual Pi file and database tools against the browser adapters,
+cover validation, project isolation, bounded results, rejected writes and partial-edit
+safety, and simulate a model repairing a compile error before explicitly refreshing.
+UI tests cover file synchronization, the compile/refresh boundary, iframe reloads,
+cancellation, tool activity, and existing conversation continuity. Bridge tests run
+the preview client and host across a real `MessageChannel` backed by fake IndexedDB.
 
 Run `pnpm check` and `pnpm build`. With a configured provider, ask for a real page
 change, inspect the changed source, and test the resulting preview in the browser.
 This external acceptance test is not an Agent runtime-observation capability.
 
 Search, source diff UI, chat persistence, deletion/rename, shell commands, package
-installation, runtime feedback and multiple compilation entries remain out of scope.
+installation, DOM inspection, automated interaction testing, a visible Console/Errors
+panel, and multiple compilation entries remain out of scope.

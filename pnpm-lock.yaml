@@ -91,6 +91,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.84.4
         version: 0.84.4(ws@8.21.3)
+      '@gamma-compose/local-db':
+        specifier: workspace:*
+        version: link:../local-db
       '@radix-ui/react-tabs':
         specifier: ^1.1.13
         version: 1.1.21(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -158,6 +161,9 @@ importers:
 
   web-packages/server:
     dependencies:
+      '@gamma-compose/local-db':
+        specifier: workspace:*
+        version: link:../../ui-packages/local-db
       '@gamma-compose/ui':
         specifier: workspace:*
         version: link:../../ui-packages/ui
