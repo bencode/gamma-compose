@@ -137,4 +137,27 @@ describe('browser project tools', () => {
     ])
     expect(JSON.stringify(result.content)).not.toContain('Use bash')
   })
+
+  it('exposes the built-in skill as a read-only virtual file without listing it as project source', async () => {
+    const project = createProjectStore({
+      entry: 'src/main.tsx',
+      files: { 'src/main.tsx': 'export {}' },
+    })
+    const skillPath = '.gamma/skills/local-db/SKILL.md'
+    const env = createProjectEnv(project, { [skillPath]: '# Local database' })
+    const tools: AgentTool[] = createFileTools(project, env)
+    const call = (name: string, args: unknown) => {
+      const tool = tools.find(tool => tool.name === name)
+      if (!tool) throw new Error(`Unknown tool: ${name}`)
+      return tool.execute('test', args)
+    }
+    expect((await call('read', { path: `/project/${skillPath}` })).content).toEqual([
+      { type: 'text', text: expect.stringContaining('# Local database') },
+    ])
+    await expect(
+      call('write', { path: `/project/${skillPath}`, content: 'replace' }),
+    ).rejects.toThrow('Read-only')
+    expect((await call('list', {})).content).toEqual([{ type: 'text', text: 'src/main.tsx' }])
+    expect(project.getSnapshot().files).toEqual({ 'src/main.tsx': 'export {}' })
+  })
 })

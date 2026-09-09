@@ -12,10 +12,13 @@ const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const Preview = () => {
   const [project] = useState(() => createProjectStore(input))
-  return <PreviewPanel {...usePreview(project)} />
+  return <PreviewPanel {...usePreview('test-project', project)} />
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe('preview lifecycle', () => {
   it('shows an HTTP service error and recovers when Retry succeeds', async () => {
@@ -31,15 +34,15 @@ describe('preview lifecycle', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByTitle('Project preview')).toBeInTheDocument()
     expect(fetch).toHaveBeenCalledTimes(2)
-    expect(report).toHaveBeenCalledWith('Preview compilation failed.', expect.any(Error))
+    expect(report).toHaveBeenCalledWith('Preview build failed.', expect.any(Error))
   })
 
-  it('does not compile file changes until requested and reloads the frame for each successful build', async () => {
+  it('keeps a compiled artifact cached until refresh explicitly reloads the frame', async () => {
     const project = createProjectStore(input)
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(result))
     let preview: ReturnType<typeof usePreview> | undefined
     const ConnectedPreview = () => {
-      preview = usePreview(project)
+      preview = usePreview('test-project', project)
       return <PreviewPanel {...preview} />
     }
     render(<ConnectedPreview />)
@@ -52,7 +55,30 @@ describe('preview lifecycle', () => {
     })
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual(project.getSnapshot())
-    expect(screen.getByTitle('Project preview')).not.toBe(frame)
+    expect(screen.getByTitle('Project preview')).toBe(frame)
+    expect(screen.getByRole('status')).toHaveTextContent('Build ready')
+    let refresh: Promise<unknown> | undefined
+    vi.useFakeTimers()
+    act(() => {
+      refresh = preview?.refresh()
+    })
+    const refreshedFrame = screen.getByTitle<HTMLIFrameElement>('Project preview')
+    expect(refreshedFrame).not.toBe(frame)
+    act(() => {
+      fireEvent(
+        window,
+        new MessageEvent('message', {
+          source: refreshedFrame.contentWindow,
+          data: { type: 'preview:loaded' },
+        }),
+      )
+    })
+    expect(screen.getByRole('status')).toHaveTextContent('Loading preview')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    await act(async () => refresh)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('cancels an Agent compile, retries latest files and ignores a late cancelled response', async () => {
@@ -69,7 +95,7 @@ describe('preview lifecycle', () => {
         })
       })
       .mockResolvedValueOnce(response({ ...result, js: 'latest' }))
-    const { result: hook } = renderHook(() => usePreview(project))
+    const { result: hook } = renderHook(() => usePreview('test-project', project))
     await waitFor(() => expect(hook.current.state.status).toBe('loading'))
     const stop = new AbortController()
     let oldRun: Promise<unknown> | undefined
@@ -88,14 +114,17 @@ describe('preview lifecycle', () => {
       hook.current.retry()
     })
     await waitFor(() =>
-      expect(hook.current.state).toMatchObject({ status: 'loading', result: { js: 'latest' } }),
+      expect(hook.current.state).toMatchObject({
+        status: 'loading',
+        frame: { result: { js: 'latest' } },
+      }),
     )
     expect(JSON.parse(String(fetch.mock.calls[2]?.[1]?.body))).toEqual(project.getSnapshot())
     await act(async () => {
       finishOld?.(response({ ...result, js: 'stale' }))
       await rejected
     })
-    expect(hook.current.state).toMatchObject({ result: { js: 'latest' } })
+    expect(hook.current.state).toMatchObject({ frame: { result: { js: 'latest' } } })
   })
 
   it('shows compilation diagnostics and retries the same project', async () => {
@@ -123,8 +152,15 @@ describe('preview lifecycle', () => {
   })
 
   it('only accepts lifecycle messages from the active iframe and recovers from runtime errors', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(result))
-    render(<Preview />)
+    const project = createProjectStore(input)
+    let preview: ReturnType<typeof usePreview> | undefined
+    const ConnectedPreview = () => {
+      preview = usePreview('test-project', project)
+      return <PreviewPanel {...preview} />
+    }
+    render(<ConnectedPreview />)
     const frame = await screen.findByTitle<HTMLIFrameElement>('Project preview')
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
     const post = vi.spyOn(frame.contentWindow as Window, 'postMessage')
@@ -132,6 +168,7 @@ describe('preview lifecycle', () => {
     expect(post).toHaveBeenCalledWith(
       { type: 'preview:render', js: result.js, css: result.css },
       '*',
+      [expect.any(MessagePort)],
     )
     fireEvent(
       window,
@@ -146,6 +183,7 @@ describe('preview lifecycle', () => {
       }),
     )
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(preview?.readErrors().errors).toEqual([])
     fireEvent(
       window,
       new MessageEvent('message', {
@@ -153,16 +191,56 @@ describe('preview lifecycle', () => {
         data: { type: 'preview:loaded' },
       }),
     )
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Loading preview')
     fireEvent(
       window,
       new MessageEvent('message', {
         source: frame.contentWindow,
-        data: { type: 'preview:error', phase: 'runtime', message: '<script>throw 1</script>' },
+        data: { type: 'preview:console', level: 'warn', message: 'Deprecated option' },
+      }),
+    )
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        source: frame.contentWindow,
+        data: {
+          type: 'preview:error',
+          phase: 'runtime',
+          source: 'security-policy',
+          fatal: false,
+          message: 'img-src blocked https://example.com/image.png.',
+        },
+      }),
+    )
+    expect(preview?.readConsole().entries).toEqual([
+      expect.objectContaining({ level: 'warn', message: 'Deprecated option' }),
+    ])
+    expect(preview?.readErrors().errors).toEqual([
+      expect.objectContaining({ source: 'security-policy', fatal: false }),
+    ])
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        source: frame.contentWindow,
+        data: {
+          type: 'preview:error',
+          phase: 'runtime',
+          source: 'window',
+          fatal: true,
+          message: '<script>throw 1</script>',
+        },
       }),
     )
     expect(screen.getByRole('alert')).toHaveTextContent('Page runtime error')
     expect(screen.getByRole('alert').querySelector('script')).toBeNull()
+    expect(preview?.readErrors()).toMatchObject({
+      status: 'failed',
+      errors: [
+        { source: 'security-policy', fatal: false },
+        { source: 'window', fatal: true },
+      ],
+    })
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.getByTitle('Project preview')).not.toBe(frame))
   })
@@ -173,6 +251,6 @@ describe('preview lifecycle', () => {
     render(<Preview />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Network unavailable')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
-    expect(report).toHaveBeenCalledWith('Preview compilation failed.', expect.any(Error))
+    expect(report).toHaveBeenCalledWith('Preview build failed.', expect.any(Error))
   })
 })

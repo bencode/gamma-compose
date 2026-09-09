@@ -27,7 +27,7 @@ export const compileProject = async (input: CompileInput): Promise<CompileResult
       platform: 'browser',
       target: 'es2022',
       jsx: 'automatic',
-      conditions: ['style'],
+      conditions: ['style', 'source'],
       minify: true,
       sourcemap: false,
       logLevel: 'silent',

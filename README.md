@@ -15,12 +15,14 @@ isolated preview.
 - Compilation diagnostics, preview loading errors, runtime errors, and retry.
 - All project copy, comments, and documentation are in English.
 - A browser-side Pi Agent with multi-turn GLM Coding Plan chat, streaming replies, and Stop.
-- Browser-local `list`, `read`, `edit`, and `write` tools, plus explicit `compile`.
-- Agent file changes immediately appear in Files; successful compilation reloads Preview.
+- Browser-local file and structured-data tools, plus explicit `compile` and `refresh_preview`.
+- Agent file changes immediately appear in Files; compile caches a build and refresh loads it.
+- Project-scoped application data backed by host-owned IndexedDB and validated JSON resource models.
 
-The Agent can inspect and modify the selected project, create text files, and compile
-the current entry. Compile diagnostics return to the Agent for source repair.
-Writes do not automatically compile. Stop keeps completed changes and cancels
+The Agent can inspect and modify the selected project, create text files, operate on
+project-local structured data, compile the current entry, and refresh the preview.
+Compile diagnostics return to the Agent for source repair. Writes do not automatically
+compile or refresh. Stop keeps completed changes and cancels
 active generation or compilation; it does not roll back files.
 Project files save automatically in IndexedDB. Conversation history and drafts
 remain in memory and clear when leaving the workbench or refreshing. Desktop
@@ -175,7 +177,8 @@ Limits and resolution:
 - File keys must be canonical project-relative paths.
 - Local TS, TSX, JS, JSX, JSON, and CSS imports resolve only inside the submitted file collection.
 - Direct package imports: react, react/jsx-runtime, react/jsx-dev-runtime,
-  react-dom, react-dom/client, react-router-dom, @gamma-compose/ui, and @gamma-compose/ui/styles.css.
+  react-dom, react-dom/client, react-router-dom, @gamma-compose/ui,
+  @gamma-compose/ui/styles.css, and @gamma-compose/local-db.
 - CSS may import tailwindcss. Built-in component dependencies come from the installed workspace.
 - Unknown packages, remote modules, filesystem escapes, custom Tailwind plugins,
   JavaScript configuration, and @source directory scanning are rejected.
@@ -207,7 +210,8 @@ license for Gamma Compose itself.
 The preview runs in an iframe with sandbox="allow-scripts", without same-origin
 permission. It owns its DOM, CSS, and React instance. The host sends compiled
 contents to the frame; the frame loads a local Blob and reports lifecycle errors
-through a source-checked message channel.
+through source-checked window messages. A transferred MessagePort proxies local
+database calls to the host; IndexedDB and Ajv do not run in the iframe.
 
 The preview CSP blocks fetch requests, remote scripts and styles, form submission,
 and external image/font resources. Data/blob images are permitted. Popups and top
@@ -227,6 +231,7 @@ remount the preview, while preserving the compiled result, draft, and file selec
 | Directory | Responsibility |
 | --- | --- |
 | ui-packages/ui | Built-in components and theme source |
+| ui-packages/local-db | JSON resource protocol, native IndexedDB runtime, preview bridge, and Agent skill |
 | ui-packages/web/src/shell | Workbench layout and shared view state |
 | ui-packages/web/src/core | Example project, compilation client, and browser Pi runtime |
 | ui-packages/web/src/features | Conversation, file browser, and isolated preview |

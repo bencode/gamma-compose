@@ -42,25 +42,34 @@ const unsupported = async () => ({
   error: new FileError('not_supported', 'This operation is not available in the browser project.'),
 })
 
-export const createProjectEnv = (project: ProjectStore): ExecutionEnv => {
-  const modified = new Map(Object.keys(project.getSnapshot().files).map(path => [path, Date.now()]))
+export const createProjectEnv = (
+  project: ProjectStore,
+  readonlyFiles: Readonly<Record<string, string>> = {},
+): ExecutionEnv => {
+  const modified = new Map(
+    [...Object.keys(project.getSnapshot().files), ...Object.keys(readonlyFiles)].map(path => [
+      path,
+      Date.now(),
+    ]),
+  )
+  const files = () => ({ ...project.getSnapshot().files, ...readonlyFiles })
   const info = (path: string): FileInfo => {
     const relative = projectRelativePath(path)
-    const files = project.getSnapshot().files
-    const file = Object.hasOwn(files, relative)
-    if (!file && relative && !Object.keys(files).some(key => key.startsWith(`${relative}/`)))
+    const current = files()
+    const file = Object.hasOwn(current, relative)
+    if (!file && relative && !Object.keys(current).some(key => key.startsWith(`${relative}/`)))
       throw new FileError('not_found', `Path not found: ${path}`, path)
     return {
       name: relative.split('/').at(-1) || 'project',
       path: relative ? `${root}/${relative}` : root,
       kind: file ? 'file' : 'directory',
-      size: file ? new TextEncoder().encode(files[relative]).byteLength : 0,
+      size: file ? new TextEncoder().encode(current[relative]).byteLength : 0,
       mtimeMs: modified.get(relative) ?? 0,
     }
   }
   const read = (path: string) => {
     if (info(path).kind !== 'file') throw new FileError('is_directory', `Not a file: ${path}`, path)
-    return project.getSnapshot().files[projectRelativePath(path)] as string
+    return files()[projectRelativePath(path)] as string
   }
   return {
     cwd: root,
@@ -73,11 +82,11 @@ export const createProjectEnv = (project: ProjectStore): ExecutionEnv => {
     exists: (path, signal) =>
       attempt(() => {
         const relative = projectRelativePath(path)
-        const files = project.getSnapshot().files
+        const current = files()
         return (
           !relative ||
-          Object.hasOwn(files, relative) ||
-          Object.keys(files).some(key => key.startsWith(`${relative}/`))
+          Object.hasOwn(current, relative) ||
+          Object.keys(current).some(key => key.startsWith(`${relative}/`))
         )
       }, signal),
     fileInfo: (path, signal) => attempt(() => info(path), signal),
@@ -88,6 +97,8 @@ export const createProjectEnv = (project: ProjectStore): ExecutionEnv => {
         if (typeof content !== 'string')
           throw new FileError('not_supported', 'Only text files are supported.', path)
         const relative = projectRelativePath(path)
+        if (Object.hasOwn(readonlyFiles, relative))
+          throw new FileError('permission_denied', `Read-only file: ${path}`, path)
         project.writeFile(relative, content)
         modified.set(relative, Date.now())
       }, signal),

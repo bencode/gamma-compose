@@ -29,6 +29,7 @@ const packages = new Set([
   'react-dom',
   'react-dom/client',
   'react-router-dom',
+  '@gamma-compose/local-db',
   '@gamma-compose/ui',
   '@gamma-compose/ui/styles.css',
 ])
@@ -62,6 +63,12 @@ export const projectPlugin = ({ files, entry }: CompileInput): Plugin => ({
       const isTailwind = args.path === 'tailwindcss' && args.kind === 'import-rule'
       if (!packages.has(args.path) && !isTailwind) {
         return { errors: [{ text: `Dependency is not allowed: ${args.path}` }] }
+      }
+      if (args.path === '@gamma-compose/local-db') {
+        return build.resolve('@gamma-compose/local-db/preview', {
+          kind: args.kind,
+          resolveDir: serverBase,
+        })
       }
       return build.resolve(args.path, {
         kind: args.kind,

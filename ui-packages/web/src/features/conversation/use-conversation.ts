@@ -1,7 +1,10 @@
 import type { Agent, AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core'
 import { useEffect, useRef, useState } from 'react'
-import type { CompileProject } from '../../core/agent/compile-tool'
-import { createConversationAgent, loadAgentConfig } from '../../core/agent/runtime'
+import {
+  type AgentPreview,
+  createConversationAgent,
+  loadAgentConfig,
+} from '../../core/agent/runtime'
 import type { ProjectStore } from '../../core/project/store'
 
 type ToolStatus = 'Pending' | 'Running' | 'Completed' | 'Failed' | 'Stopped'
@@ -37,6 +40,7 @@ const messageSnapshot = (message: AgentMessage, id: number): ConversationMessage
 }
 
 const conversationSnapshot = (agent: Agent, statuses: Map<string, ToolStatus>) => {
+  const toolLabels = new Map(agent.state.tools.map(tool => [tool.name, tool.label]))
   const messages = agent.state.messages.flatMap((message, id) => {
     const snapshot = messageSnapshot(message, id)
     if (message.role !== 'assistant') return snapshot
@@ -45,7 +49,7 @@ const conversationSnapshot = (agent: Agent, statuses: Map<string, ToolStatus>) =
         ? [
             {
               id: block.id,
-              name: block.name,
+              name: toolLabels.get(block.name) ?? block.name,
               path:
                 typeof block.arguments === 'object' &&
                 block.arguments !== null &&
@@ -80,7 +84,11 @@ const updateToolStatus = (
     )
 }
 
-export const useConversation = (project: ProjectStore, compile: CompileProject) => {
+export const useConversation = (
+  projectId: string,
+  project: ProjectStore,
+  { compile, refresh, readErrors, readConsole }: AgentPreview,
+) => {
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [phase, setPhase] = useState<ConversationPhase>('initializing')
@@ -100,7 +108,12 @@ export const useConversation = (project: ProjectStore, compile: CompileProject) 
           setPhase('unavailable')
           return
         }
-        const agent = createConversationAgent(config, project, compile)
+        const agent = createConversationAgent(config, projectId, project, {
+          compile,
+          refresh,
+          readErrors,
+          readConsole,
+        })
         agentRef.current = agent
         toolStatuses.current.clear()
         unsubscribe = agent.subscribe((event, signal) => {
@@ -121,7 +134,7 @@ export const useConversation = (project: ProjectStore, compile: CompileProject) 
       agentRef.current?.abort()
       agentRef.current = undefined
     }
-  }, [project, compile])
+  }, [projectId, project, compile, refresh, readErrors, readConsole])
 
   const send = async () => {
     const agent = agentRef.current
