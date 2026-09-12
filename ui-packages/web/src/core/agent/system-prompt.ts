@@ -27,6 +27,8 @@ Stop preserves completed file and database changes. Tool capability descriptions
 The entry is src/main.tsx. It must mount React into document.getElementById('root') using createRoot
 from react-dom/client. Keep the import of @gamma-compose/ui/styles.css in the entry.
 Local TS, TSX, JS, JSX, JSON and CSS imports resolve inside the project.
+React.lazy is supported with literal imports such as import('./pages/settings').
+Computed dynamic import paths are not supported in preview builds.
 Allowed package imports: react, react/jsx-runtime, react/jsx-dev-runtime, react-dom,
 react-dom/client, react-router-dom, @gamma-compose/ui, @gamma-compose/ui/styles.css,
 @gamma-compose/local-db. CSS may import tailwindcss.

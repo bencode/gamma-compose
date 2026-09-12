@@ -12,6 +12,10 @@ export default defineConfig({
         target: process.env.GAMMA_BACKEND ?? 'http://127.0.0.1:3301',
         changeOrigin: true,
       },
+      '/__preview': {
+        target: process.env.GAMMA_BACKEND ?? 'http://127.0.0.1:3301',
+        changeOrigin: true,
+      },
     },
   },
   test: {

@@ -1,4 +1,4 @@
-import type { CompileInput } from '@gamma-compose/server/compile-contract'
+import type { ProjectSnapshot } from './store'
 
 export const demoFiles: Readonly<Record<string, string>> = {
   'src/main.tsx': `import { createRoot } from 'react-dom/client'
@@ -112,4 +112,4 @@ Project files save automatically in this browser; conversation history does not 
 `,
 }
 
-export const demoProject: CompileInput = { entry: 'src/main.tsx', files: demoFiles }
+export const demoProject: ProjectSnapshot = { entry: 'src/main.tsx', files: demoFiles }

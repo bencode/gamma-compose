@@ -1,3 +1,10 @@
+import { lazy, Suspense } from 'react'
+
+const SourceCodeViewer = lazy(async () => {
+  const module = await import('./source-code-viewer')
+  return { default: module.SourceCodeViewer }
+})
+
 type FileBrowserProps = {
   files: Readonly<Record<string, string>>
   selectedPath: string
@@ -59,14 +66,19 @@ export const FileBrowser = (props: FileBrowserProps) => (
         <h2>{props.selectedPath}</h2>
         <span>Read only</span>
       </header>
-      <textarea
-        className="source-content"
-        aria-label={props.selectedPath}
-        value={props.files[props.selectedPath]}
-        readOnly
-        wrap="off"
-        spellCheck={false}
-      />
+      <Suspense
+        fallback={
+          <div className="source-content source-viewer-loading" role="status">
+            Loading source…
+          </div>
+        }
+      >
+        <SourceCodeViewer
+          key={props.selectedPath}
+          path={props.selectedPath}
+          value={props.files[props.selectedPath] ?? ''}
+        />
+      </Suspense>
     </section>
   </section>
 )

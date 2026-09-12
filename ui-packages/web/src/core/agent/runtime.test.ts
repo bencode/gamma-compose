@@ -6,8 +6,26 @@ import { createCompileTool } from './compile-tool'
 import { type AgentPreview, createConversationAgent } from './runtime'
 
 const config = { enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' } as const
+const compileInput = (files: typeof demoProject) => ({
+  baseBuildId: null,
+  entry: files.entry,
+  sourceTree: {},
+  changes: { ...files.files },
+})
+const build = {
+  projectId: 'test-project',
+  buildId: 'a'.repeat(64),
+  compilerVersion: '1',
+  entry: 'src/main.tsx',
+  files: {},
+  previewUrl: '/__preview/test-project/1',
+}
 const createPreview = (changes: Partial<AgentPreview> = {}): AgentPreview => ({
-  compile: async () => ({ ok: true, js: '', css: '', warnings: [] }),
+  compile: async () => ({
+    ok: true,
+    build,
+    warnings: [],
+  }),
   refresh: async () => ({ refreshed: true, buildId: 1 }),
   readErrors: () => ({ buildId: 1, status: 'ready', errors: [], dropped: 0 }),
   readConsole: () => ({ buildId: 1, entries: [], dropped: 0 }),
@@ -42,10 +60,21 @@ describe('browser Pi runtime', () => {
     [422, 'compile'],
   ] as const)('classifies HTTP %i from the compilation client as %s', async (status, phase) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      Response.json({ ok: false, errors: [{ message: 'Request failed' }] }, { status }),
+      Response.json(
+        {
+          ok: false,
+          reason: status === 400 || status === 413 ? 'invalid-input' : 'compile',
+          errors: [{ message: 'Request failed' }],
+        },
+        { status },
+      ),
     )
     const tool = createCompileTool(signal =>
-      compileFiles(demoProject, signal ?? new AbortController().signal),
+      compileFiles(
+        'test-project',
+        compileInput(demoProject),
+        signal ?? new AbortController().signal,
+      ),
     )
     await expect(tool.execute('compile-error', {})).rejects.toThrow(`"phase":"${phase}"`)
   })
@@ -73,15 +102,16 @@ describe('browser Pi runtime', () => {
         { headers: { 'Content-Type': 'text/event-stream' } },
       )
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      if (String(input) === '/api/compile') {
+      if (String(input) === '/api/compiler/projects/test-project/builds') {
         compilations += 1
-        expect(JSON.parse(String(init?.body)).files['src/main.tsx']).toBe(
+        expect(JSON.parse(String(init?.body)).changes['src/main.tsx']).toBe(
           compilations === 1 ? 'export const value =' : 'export const value = 2',
         )
         return compilations === 1
           ? Response.json(
               {
                 ok: false,
+                reason: 'compile',
                 errors: [
                   { message: 'Unexpected end of file', path: 'src/main.tsx', line: 1, column: 21 },
                 ],
@@ -90,8 +120,7 @@ describe('browser Pi runtime', () => {
             )
           : Response.json({
               ok: true,
-              js: 'BUNDLE_MUST_STAY_IN_PREVIEW',
-              css: 'CSS_MUST_STAY_IN_PREVIEW',
+              build: { ...build, previewUrl: '/__preview/BUNDLE_MUST_STAY_IN_PREVIEW' },
               warnings: [],
             })
       }
@@ -128,7 +157,11 @@ describe('browser Pi runtime', () => {
       project,
       createPreview({
         compile: signal =>
-          compileFiles(project.getSnapshot(), signal ?? new AbortController().signal),
+          compileFiles(
+            'test-project',
+            compileInput(project.getSnapshot()),
+            signal ?? new AbortController().signal,
+          ),
         refresh,
       }),
     )
@@ -217,6 +250,7 @@ describe('browser Pi runtime', () => {
     await expect(unavailable.execute('offline', {})).rejects.toThrow('"phase":"service"')
     const tool = createCompileTool(async () => ({
       ok: false,
+      reason: 'compile',
       errors: [{ message: '界'.repeat(30_000) }],
     }))
     try {

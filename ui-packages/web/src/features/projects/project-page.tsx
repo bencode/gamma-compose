@@ -5,7 +5,12 @@ import type { Project } from '../../core/project/records'
 import { createProjectStore, type ProjectStore } from '../../core/project/store'
 import { Workbench } from '../../shell/workbench'
 
-type LoadedProject = { record: Project; project: ProjectStore; retrySave: () => void }
+type LoadedProject = {
+  record: Project
+  project: ProjectStore
+  database: ProjectDatabase
+  retrySave: () => void
+}
 
 const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) => {
   const [loaded, setLoaded] = useState<LoadedProject>()
@@ -57,7 +62,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
           void save()
         }
         unsubscribe = project.subscribe(retrySave)
-        setLoaded({ record, project, retrySave })
+        setLoaded({ record, project, database, retrySave })
       } catch (cause) {
         console.error('Could not load the project.', cause)
         if (active)
@@ -82,6 +87,10 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
         projectId={loaded.record.id}
         project={loaded.project}
         projectName={loaded.record.name}
+        compilePersistence={{
+          load: () => loaded.database.getCompileState(loaded.record.id),
+          save: loaded.database.saveCompileState,
+        }}
         saveStatus={saveStatus}
         saveError={saveError}
         onRetrySave={loaded.retrySave}

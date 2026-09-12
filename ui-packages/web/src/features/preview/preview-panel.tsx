@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { createPreviewDocument, isPreviewMessage, type PreviewMessage } from './preview-document'
+import { useEffect, useRef } from 'react'
+import { isPreviewMessage, type PreviewMessage } from './preview-document'
 import type { PreviewState } from './use-preview'
 
 type PreviewPanelProps = {
@@ -25,7 +25,6 @@ export const PreviewPanel = ({
 }: PreviewPanelProps) => {
   const frame = useRef<HTMLIFrameElement>(null)
   const closeDatabaseBridge = useRef<() => void>(undefined)
-  const [document] = useState(createPreviewDocument)
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
       if (
@@ -51,11 +50,7 @@ export const PreviewPanel = ({
     closeDatabaseBridge.current?.()
     const channel = new MessageChannel()
     closeDatabaseBridge.current = openDatabaseBridge(channel.port1)
-    frame.current?.contentWindow?.postMessage(
-      { type: 'preview:render', js: state.frame.result.js, css: state.frame.result.css },
-      '*',
-      [channel.port2],
-    )
+    frame.current?.contentWindow?.postMessage({ type: 'preview:start' }, '*', [channel.port2])
   }
 
   return (
@@ -72,7 +67,7 @@ export const PreviewPanel = ({
             ref={frame}
             title="Project preview"
             sandbox="allow-scripts"
-            srcDoc={document}
+            src={state.frame.result.build.previewUrl}
             className="preview-frame"
             onLoad={renderPreview}
           />

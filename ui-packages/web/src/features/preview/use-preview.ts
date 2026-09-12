@@ -2,7 +2,8 @@ import { LocalDbError, openLocalDb } from '@gamma-compose/local-db'
 import { createLocalDbBridgeHost } from '@gamma-compose/local-db/bridge'
 import type { CompileDiagnostic, CompileResult } from '@gamma-compose/server/compile-contract'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { compileFiles } from '../../core/compile/client'
+import { createCompileCoordinator } from '../../core/compile/coordinator'
+import type { ProjectCompileState } from '../../core/project/records'
 import type { ProjectSnapshot, ProjectStore } from '../../core/project/store'
 import { createPreviewDiagnostics, type PreviewDiagnostics } from './preview-diagnostics'
 import type { PreviewMessage } from './preview-document'
@@ -42,9 +43,19 @@ const rejectWaiter = (pending: RefreshWaiter | undefined, cause: Error) => {
   pending.reject(cause)
 }
 
-export const usePreview = (projectId: string, project: ProjectStore) => {
+export const usePreview = (
+  projectId: string,
+  project: ProjectStore,
+  compilePersistence: {
+    load: () => Promise<ProjectCompileState | undefined>
+    save: (state: ProjectCompileState) => Promise<void>
+  },
+) => {
   const activeRequest = useRef<AbortController | null>(null)
   const artifact = useRef<CompiledArtifact | undefined>(undefined)
+  const coordinator = useRef<ReturnType<typeof createCompileCoordinator>>(undefined)
+  coordinator.current ??= createCompileCoordinator(projectId, compilePersistence)
+  const compileCoordinator = coordinator.current
   const waiter = useRef<RefreshWaiter | undefined>(undefined)
   const buildId = useRef(0)
   const diagnosticsRef = useRef<PreviewDiagnostics | undefined>(undefined)
@@ -81,7 +92,7 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       try {
-        const result = await compileFiles(snapshot, requestSignal)
+        const result = await compileCoordinator.compile(snapshot, requestSignal)
         requestSignal.throwIfAborted()
         if (activeRequest.current !== controller)
           throw new DOMException('Compilation superseded.', 'AbortError')
@@ -119,7 +130,7 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
         if (activeRequest.current === controller) activeRequest.current = null
       }
     },
-    [project],
+    [compileCoordinator, project],
   )
 
   const refresh = useCallback(

@@ -88,21 +88,21 @@ describe('browser project tools', () => {
 
   it('enforces the compiler file and serialized UTF-8 byte limits before publishing', async () => {
     const files = Object.fromEntries(
-      Array.from({ length: 127 }, (_, index) => [`src/${index}.ts`, '']),
+      Array.from({ length: 1_023 }, (_, index) => [`src/${index}.ts`, '']),
     )
     const { project, call } = setup({ ...files, 'src/main.tsx': 'export {}' })
     const original = project.getSnapshot()
-    await expect(call('write', { path: 'extra.ts', content: '' })).rejects.toThrow('128')
+    await expect(call('write', { path: 'extra.ts', content: '' })).rejects.toThrow('1024')
     await expect(
-      call('write', { path: 'src/main.tsx', content: '界'.repeat(700_000) }),
-    ).rejects.toThrow('2 MiB')
+      call('write', { path: 'src/main.tsx', content: '界'.repeat(5_600_000) }),
+    ).rejects.toThrow('16 MiB')
     expect(project.getSnapshot()).toBe(original)
     await expect(
       call('edit', {
         path: 'src/main.tsx',
-        edits: [{ oldText: 'export {}', newText: '界'.repeat(700_000) }],
+        edits: [{ oldText: 'export {}', newText: '界'.repeat(5_600_000) }],
       }),
-    ).rejects.toThrow('2 MiB')
+    ).rejects.toThrow('16 MiB')
     expect(project.getSnapshot()).toBe(original)
   })
 

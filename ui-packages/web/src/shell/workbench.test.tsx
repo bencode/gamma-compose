@@ -3,9 +3,24 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { demoFiles, demoProject } from '../core/project/demo-project'
+import { demoProject } from '../core/project/demo-project'
 import { createProjectStore } from '../core/project/store'
 import { Workbench as WorkbenchView } from './workbench'
+
+const compiled = (previewUrl = '/__preview/test-project/1') => ({
+  ok: true,
+  build: {
+    projectId: 'test-project',
+    buildId: 'a'.repeat(64),
+    compilerVersion: '1',
+    entry: demoProject.entry,
+    files: {},
+    previewUrl,
+  },
+  warnings: [],
+})
+const missingTree = () =>
+  Response.json({ ok: false, reason: 'not-found', error: { message: 'Missing' } }, { status: 404 })
 
 const Workbench = () => {
   const [project] = useState(() => createProjectStore(demoProject))
@@ -17,19 +32,19 @@ const Workbench = () => {
         projectName="Team workspace"
         saveStatus="saved"
         onRetrySave={() => undefined}
+        compilePersistence={{ load: async () => undefined, save: async () => undefined }}
       />
     </MemoryRouter>
   )
 }
 
 beforeEach(() => {
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async input =>
-    String(input) === '/api/agent/config'
-      ? Response.json({ enabled: false })
-      : new Response(JSON.stringify({ ok: true, js: 'export {}', css: '', warnings: [] }), {
-          headers: { 'Content-Type': 'application/json' },
-        }),
-  )
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const url = String(input)
+    if (url === '/api/agent/config') return Response.json({ enabled: false })
+    if (url.endsWith('/tree')) return missingTree()
+    return Response.json(compiled())
+  })
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -137,10 +152,11 @@ describe('workbench', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       if (String(input) === '/api/agent/config')
         return Response.json({ enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' })
-      if (String(input) === '/api/compile') {
+      if (String(input).endsWith('/builds')) {
         compileInputs.push(String(init?.body))
-        return Response.json({ ok: true, js: 'export {}', css: '', warnings: [] })
+        return Response.json(compiled())
       }
+      if (String(input).endsWith('/tree')) return missingTree()
       modelRequests += 1
       if (modelRequests === 1)
         return new Response(
@@ -175,7 +191,7 @@ describe('workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(finish).toBeDefined())
     await user.click(screen.getByRole('tab', { name: 'Files' }))
-    expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).toHaveValue(updated)
+    expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     expect(compileInputs).toHaveLength(1)
     expect(screen.getByTitle('Project preview')).toBe(frame)
     act(() => {
@@ -199,7 +215,7 @@ describe('workbench', () => {
     })
     await screen.findByText('Compiled.', undefined, { timeout: 2_000 })
     expect(compileInputs).toHaveLength(2)
-    expect(JSON.parse(compileInputs[1] ?? '{}').files['src/app.tsx']).toBe(updated)
+    expect(JSON.parse(compileInputs[1] ?? '{}').changes['src/app.tsx']).toBe(updated)
     await user.click(screen.getByRole('tab', { name: 'Preview' }))
     expect(screen.getByTitle('Project preview')).toBe(refreshedFrame)
     expect(modelRequests).toBe(4)
@@ -215,19 +231,30 @@ describe('workbench', () => {
     await user.click(tabs.getByRole('tab', { name: 'Files' }))
     const files = within(screen.getByRole('region', { name: 'File browser' }))
     const source = screen.getByRole('region', { name: 'Source code' })
-    const code = within(source).getByRole('textbox')
+    const code = await within(source).findByRole('textbox', { name: 'src/app.tsx' })
     expect(within(source).getByRole('heading')).toHaveTextContent('src/app.tsx')
-    expect(code).toHaveValue(demoFiles['src/app.tsx'])
-    expect(code).toHaveAttribute('readonly')
+    expect(code).toHaveTextContent('Team workspace')
+    expect(code).toHaveAttribute('aria-readonly', 'true')
+    expect(code).toHaveAttribute('contenteditable', 'false')
+    expect(source.querySelector('.cm-lineNumbers')).toBeInTheDocument()
     expect(source.querySelector('table')).toBeNull()
 
     await user.click(files.getByRole('button', { name: 'styles.css' }))
     expect(within(source).getByRole('heading')).toHaveTextContent('src/styles.css')
-    expect(within(source).getByRole('textbox')).toHaveValue(demoFiles['src/styles.css'])
+    expect(
+      await within(source).findByRole('textbox', { name: 'src/styles.css' }),
+    ).toHaveTextContent('text-wrap: balance')
   })
 
   it('preserves draft, file selection, directories and preview across tabs', async () => {
     const user = userEvent.setup()
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url === '/api/agent/config')
+        return Response.json({ enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' })
+      if (url.endsWith('/tree')) return missingTree()
+      return Response.json(compiled())
+    })
     render(<Workbench />)
     const frame = await screen.findByTitle('Project preview')
     const draft = screen.getByRole('textbox', { name: 'Message' })
@@ -244,7 +271,7 @@ describe('workbench', () => {
     await user.click(tabs.getByRole('tab', { name: 'Files' }))
 
     expect(screen.getByTitle('Project preview')).toBe(frame)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(3)
     expect(draft).toHaveValue('A team workspace')
     const visibleFiles = within(screen.getByRole('region', { name: 'File browser' }))
     expect(visibleFiles.getByRole('button', { name: 'src' })).toHaveAttribute(
@@ -252,7 +279,7 @@ describe('workbench', () => {
       'false',
     )
     expect(screen.getByRole('heading', { name: 'src/styles.css' })).toBeVisible()
-    expect(screen.getByRole('button', { name: /Send/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Send/ })).toBeEnabled()
     await user.click(visibleFiles.getByRole('button', { name: 'src' }))
     expect(visibleFiles.getByRole('button', { name: 'styles.css' })).toHaveAttribute(
       'aria-current',
@@ -294,7 +321,8 @@ describe('workbench', () => {
           { headers: { 'Content-Type': 'text/event-stream' } },
         )
       }
-      return Response.json({ ok: true, js: 'export {}', css: '', warnings: [] })
+      if (String(input).endsWith('/tree')) return missingTree()
+      return Response.json(compiled())
     })
     render(<Workbench />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {

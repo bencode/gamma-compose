@@ -8,6 +8,7 @@ import {
   useDefaultLayout,
 } from 'react-resizable-panels'
 import { Link } from 'react-router-dom'
+import type { ProjectCompileState } from '../core/project/records'
 import type { ProjectStore } from '../core/project/store'
 import { ConversationPanel } from '../features/conversation/conversation-panel'
 import { useConversation } from '../features/conversation/use-conversation'
@@ -74,6 +75,10 @@ type WorkbenchProps = {
   saveStatus: 'saving' | 'saved' | 'error'
   saveError?: string
   onRetrySave: () => void
+  compilePersistence: {
+    load: () => Promise<ProjectCompileState | undefined>
+    save: (state: ProjectCompileState) => Promise<void>
+  }
 }
 
 export const Workbench = ({
@@ -83,9 +88,10 @@ export const Workbench = ({
   saveStatus,
   saveError,
   onRetrySave,
+  compilePersistence,
 }: WorkbenchProps) => {
   const snapshot = useSyncExternalStore(project.subscribe, project.getSnapshot)
-  const preview = usePreview(projectId, project)
+  const preview = usePreview(projectId, project, compilePersistence)
   const conversation = useConversation(projectId, project, preview)
   const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot)
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -120,7 +126,7 @@ export const Workbench = ({
           groupResizeBehavior={isDesktop ? 'preserve-pixel-size' : 'preserve-relative-size'}
         >
           <aside
-            className="flex h-full min-h-0 min-w-0 flex-col bg-panel max-[899px]:border-b max-[899px]:border-line"
+            className="conversation-workspace flex h-full min-h-0 min-w-0 flex-col bg-panel max-[899px]:border-b max-[899px]:border-line"
             aria-label="Conversation workspace"
           >
             <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-line pr-3 pl-4">
@@ -146,21 +152,12 @@ export const Workbench = ({
                 </Tabs.Trigger>
               </Tabs.List>
             </header>
-            <ConversationPanel {...conversation} />
-            <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-2 text-xs text-muted">
-              <span role={saveStatus === 'error' ? 'alert' : 'status'} title={saveError}>
-                {saveStatus === 'saving'
-                  ? 'Saving…'
-                  : saveStatus === 'error'
-                    ? 'Save failed'
-                    : 'Saved'}
-              </span>
-              {saveStatus === 'error' && (
-                <button type="button" className="text-accent underline" onClick={onRetrySave}>
-                  Retry save
-                </button>
-              )}
-            </div>
+            <ConversationPanel
+              {...conversation}
+              saveStatus={saveStatus}
+              saveError={saveError}
+              onRetrySave={onRetrySave}
+            />
           </aside>
         </Panel>
         {isDesktop && (

@@ -23,6 +23,7 @@
     "@gamma-compose/ui": "workspace:*",
     "@hono/node-server": "^2.0.4",
     "@tailwindcss/oxide": "4.3.3",
+    "es-module-lexer": "^1.7.0",
     "esbuild": "0.28.2",
     "hono": "^4.12.32",
     "react": "19.2.8",

@@ -1,4 +1,4 @@
-import type { Project, Template } from './records'
+import type { Project, ProjectCompileState, Template } from './records'
 import { createProjectStore } from './store'
 import { templates } from './templates'
 
@@ -26,10 +26,20 @@ const projectDatabase = (db: IDBDatabase) => {
     const transaction = db.transaction('projects', 'readwrite')
     await completed(transaction, transaction.objectStore('projects').put(project))
   }
+  const getCompileState = async (projectId: string): Promise<ProjectCompileState | undefined> => {
+    const transaction = db.transaction('compileStates', 'readonly')
+    return completed(transaction, transaction.objectStore('compileStates').get(projectId))
+  }
+  const saveCompileState = async (state: ProjectCompileState): Promise<void> => {
+    const transaction = db.transaction('compileStates', 'readwrite')
+    await completed(transaction, transaction.objectStore('compileStates').put(state))
+  }
   return {
     close: () => db.close(),
     getProject,
     saveProject,
+    getCompileState,
+    saveCompileState,
     listTemplates: async (): Promise<Template[]> => {
       const transaction = db.transaction('templates', 'readonly')
       const stored: Template[] = await completed(
@@ -70,15 +80,18 @@ export type ProjectDatabase = ReturnType<typeof projectDatabase>
 
 export const openProjectDatabase = (): Promise<ProjectDatabase> =>
   new Promise((resolve, reject) => {
-    const request = indexedDB.open('gamma-compose', 1)
+    const request = indexedDB.open('gamma-compose', 2)
     let blocked = false
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = event => {
       const db = request.result
-      const store = db.createObjectStore('templates', { keyPath: 'id' })
-      db.createObjectStore('projects', { keyPath: 'id' })
-      templates.forEach(template => {
-        store.add(template)
-      })
+      if (event.oldVersion < 1) {
+        const store = db.createObjectStore('templates', { keyPath: 'id' })
+        db.createObjectStore('projects', { keyPath: 'id' })
+        templates.forEach(template => {
+          store.add(template)
+        })
+      }
+      if (event.oldVersion < 2) db.createObjectStore('compileStates', { keyPath: 'projectId' })
     }
     request.onerror = () =>
       reject(request.error ?? new Error('Could not open the project database.'))

@@ -83,4 +83,43 @@ describe('local projects', () => {
     })
     await expect(openProjectDatabase()).rejects.toThrow('Storage disabled')
   })
+
+  it('upgrades version 1 without replacing projects and persists compile state', async () => {
+    const project = {
+      id: 'legacy-project',
+      name: 'Legacy',
+      updatedAt: 1,
+      entry: 'main.ts',
+      files: { 'main.ts': 'export {}' },
+    }
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('gamma-compose', 1)
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('templates', { keyPath: 'id' })
+        request.result.createObjectStore('projects', { keyPath: 'id' }).add(project)
+      }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        request.result.close()
+        resolve()
+      }
+    })
+
+    const database = await open()
+    expect(await database.getProject(project.id)).toEqual(project)
+    const state = {
+      projectId: project.id,
+      updatedAt: 2,
+      build: {
+        projectId: project.id,
+        buildId: 'a'.repeat(64),
+        compilerVersion: '1',
+        entry: project.entry,
+        files: {},
+        previewUrl: '/__preview/projects/legacy/builds/a/index.html',
+      },
+    }
+    await database.saveCompileState(state)
+    expect(await database.getCompileState(project.id)).toEqual(state)
+  })
 })

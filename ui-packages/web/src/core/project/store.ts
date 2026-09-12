@@ -9,6 +9,9 @@ export type ProjectStore = {
   writeFile: (path: string, content: string) => void
 }
 
+const maxProjectFiles = 1_024
+const maxProjectBytes = 16 * 1024 * 1024
+
 export const validateProjectPath = (path: string) => {
   if (
     !path ||
@@ -26,11 +29,12 @@ const validateSnapshot = (snapshot: ProjectSnapshot) => {
   paths.forEach(validateProjectPath)
   if (!Object.hasOwn(snapshot.files, snapshot.entry) || !/\.(tsx?|jsx?)$/.test(snapshot.entry))
     throw new Error('The project entry must be an existing JavaScript or TypeScript file.')
-  if (!paths.length || paths.length > 128) throw new Error('The project allows 1 to 128 files.')
+  if (!paths.length || paths.length > maxProjectFiles)
+    throw new Error(`The project allows 1 to ${maxProjectFiles} files.`)
   if (paths.some(path => paths.some(other => other.startsWith(`${path}/`))))
     throw new Error('A file cannot also be a directory.')
-  if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > 2 * 1024 * 1024)
-    throw new Error('The serialized project must not exceed 2 MiB.')
+  if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > maxProjectBytes)
+    throw new Error('The serialized project must not exceed 16 MiB.')
 }
 
 export const createProjectStore = (initial: ProjectSnapshot): ProjectStore => {

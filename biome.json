@@ -1,6 +1,8 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
-  "files": { "includes": ["**", "!**/node_modules", "!**/dist", "!pnpm-lock.yaml"] },
+  "files": {
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/.gamma-data", "!pnpm-lock.yaml"]
+  },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,

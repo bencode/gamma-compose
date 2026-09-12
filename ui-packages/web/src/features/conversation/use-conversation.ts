@@ -19,7 +19,18 @@ export type ConversationMessage = {
   tools?: ToolActivity[]
 }
 
-type ConversationPhase = 'initializing' | 'ready' | 'unavailable' | 'error' | 'running' | 'stopping'
+export type ConversationPhase =
+  | 'initializing'
+  | 'ready'
+  | 'unavailable'
+  | 'error'
+  | 'running'
+  | 'stopping'
+
+type ConversationModel = {
+  id: string
+  label: string
+}
 
 const messageSnapshot = (message: AgentMessage, id: number): ConversationMessage[] => {
   if (message.role !== 'user' && message.role !== 'assistant') return []
@@ -93,6 +104,7 @@ export const useConversation = (
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [phase, setPhase] = useState<ConversationPhase>('initializing')
   const [error, setError] = useState<string>()
+  const [model, setModel] = useState<ConversationModel>()
   const agentRef = useRef<Agent>(undefined)
   const busyRef = useRef(false)
   const toolStatuses = useRef(new Map<string, ToolStatus>())
@@ -115,6 +127,7 @@ export const useConversation = (
           readConsole,
         })
         agentRef.current = agent
+        setModel({ id: agent.state.model.id, label: agent.state.model.name })
         toolStatuses.current.clear()
         unsubscribe = agent.subscribe((event, signal) => {
           updateToolStatus(event, toolStatuses.current, signal)
@@ -172,5 +185,5 @@ export const useConversation = (
     agentRef.current?.abort()
   }
 
-  return { draft, setDraft, messages, phase, error, send, stop }
+  return { draft, setDraft, messages, phase, error, model, send, stop }
 }

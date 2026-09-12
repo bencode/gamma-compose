@@ -29,7 +29,7 @@ Read failures and missing project IDs do not silently create replacement project
 Closing the workbench stops the Agent and compilation; chat and drafts are not saved.
 
 Before publishing, the store validates canonical relative paths, file/directory
-collisions, the 128-file limit and the 2 MiB serialized UTF-8 compile request limit.
+collisions, the 1,024-file limit and the 16 MiB serialized UTF-8 project limit.
 Rejected writes keep the previous snapshot. An edit containing several replacements
 publishes once after Pi has validated all replacements. Stop does not undo writes.
 
@@ -101,11 +101,12 @@ snapshot failures are reported visibly rather than silently discarded.
 ```text
 User request -> Pi file tools -> current project snapshot
                                -> explicit compile tool
-                                  -> POST /api/compile
+                                  -> POST /api/compiler/projects/:projectId/builds
+                                     with a complete hash tree and required source text
                                      -> failure: Pi tool error -> model repair
-                                     -> success: cache artifact
+                                     -> success: publish immutable static revision
                                         -> explicit refresh_preview
-                                           -> new iframe reports preview:loaded
+                                           -> iframe loads previewUrl and reports preview:loaded
 
 User request -> Pi database tools -> host-owned project IndexedDB
                                   -> explicit refresh_preview using current artifact
@@ -139,7 +140,7 @@ service failures as broken source. Diagnostic text is capped at 50 KiB with an e
 truncation notice. The preview retains the complete compiler diagnostics.
 
 Compile success returns only `compiled: true`, `refreshRequired: true`, and
-`warnings`. JavaScript and CSS remain in preview state, never in tool content or
+`warnings`. The build URL remains in preview state and never enters tool content or
 details. `refresh_preview` returns `{ refreshed: true, buildId }` after module load.
 It may also be called after database-only changes because no source compilation is
 needed. A successful result also means no reported error occurred during the
@@ -179,13 +180,31 @@ There is no automatic repair turn or budget in this iteration; the user initiate
 the diagnostic loop through a normal conversation message and can Stop the Agent.
 
 The compiler additionally allows `react-router-dom` and `@gamma-compose/local-db`
-from its installed dependencies. The local database import resolves to a small
-sandbox client; IndexedDB and Ajv are not bundled into or executed by the opaque-origin
+from its installed dependencies. The local database import maps to a small sandbox
+client in the shared runtime; IndexedDB and Ajv are not executed by the opaque-origin
 iframe. Instead, a transferred `MessagePort` carries typed CRUD requests to a
 host-owned bridge. The iframe retains `sandbox="allow-scripts"` and the existing CSP.
-Preview routes use MemoryRouter, independently of the host BrowserRouter. The bundle
-still contains a single entry and its dependencies. Gallery thumbnails are static screenshots of the templates,
-not live compiler requests for every card.
+Preview routes use MemoryRouter, independently of the host BrowserRouter. Gallery
+thumbnails are static screenshots of the templates, not live compiler requests for
+every card.
+
+The browser owns the source tree and stores its last successful compiled tree in the
+project database. The initial compile uploads every compilable file. Later builds send
+the complete path/hash/byte manifest tree and normally upload text only for changed or
+new files. When source paths are added or deleted, the browser also uploads every
+non-CSS module so extensionless imports can be resolved again. Absence from the tree
+represents deletion. A 409 causes one harness-owned tree read, diff, and retry. The
+Agent never manages hashes or synchronization.
+
+The server keeps no source session. It publishes rebuildable immutable output under
+`GAMMA_DATA_DIR` (default `.gamma-data`): an HTML entry, one ESM output for every
+declared module, independent CSS artifacts, and final Tailwind CSS. Unchanged artifacts
+are hard-linked from the current build. Local import specifiers remain intact and the
+static route resolves extensionless, exact-extension, JSON, and index imports to one
+canonical output URL. React, React DOM, React Router, built-in UI, and the preview
+database client share a precompiled import-map runtime. Literal `React.lazy` imports
+remain dynamic; computed import paths are rejected. Static responses include the CORS
+and cross-origin resource headers required by the iframe's opaque origin.
 
 ## Verification
 

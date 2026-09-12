@@ -23,4 +23,15 @@ vi.stubGlobal(
   },
 )
 
+Object.defineProperties(Range.prototype, {
+  getBoundingClientRect: {
+    configurable: true,
+    value: () => new DOMRect(),
+  },
+  getClientRects: {
+    configurable: true,
+    value: () => [],
+  },
+})
+
 afterEach(cleanup)

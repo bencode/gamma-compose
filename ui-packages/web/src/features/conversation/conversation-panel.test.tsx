@@ -6,7 +6,18 @@ import { createProjectStore } from '../../core/project/store'
 import { ConversationPanel } from './conversation-panel'
 import { useConversation } from './use-conversation'
 
-const compile = async () => ({ ok: true as const, js: '', css: '', warnings: [] })
+const compile = async () => ({
+  ok: true as const,
+  build: {
+    projectId: 'test-project',
+    buildId: 'a'.repeat(64),
+    compilerVersion: '1',
+    entry: 'src/main.tsx',
+    files: {},
+    previewUrl: '/__preview/test-project/1',
+  },
+  warnings: [],
+})
 const refresh = async () => ({ refreshed: true as const, buildId: 1 })
 const preview = {
   compile,
@@ -16,7 +27,13 @@ const preview = {
 }
 const ConnectedConversation = () => {
   const [project] = useState(() => createProjectStore(demoProject))
-  return <ConversationPanel {...useConversation('test-project', project, preview)} />
+  return (
+    <ConversationPanel
+      {...useConversation('test-project', project, preview)}
+      saveStatus="saved"
+      onRetrySave={() => undefined}
+    />
+  )
 }
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
   new TextEncoder().encode(
@@ -59,6 +76,15 @@ const sendMessage = async (text: string) => {
 }
 
 describe('conversation', () => {
+  it('shows the active model and local persistence inside the composer', async () => {
+    render(<ConnectedConversation />)
+
+    expect(await screen.findByRole('combobox', { name: 'Model' })).toHaveValue('glm-5.3')
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeDisabled()
+    expect(screen.getByRole('status', { name: 'Saved in this browser' })).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('GLM_API_KEY')
+  })
+
   it.each([null, [], 7, 'invalid'].map(args => ({ args })))(
     'recovers from invalid tool arguments $args without losing the conversation',
     async ({ args }) => {
@@ -271,7 +297,7 @@ describe('conversation', () => {
   })
 
   it.each([
-    [{ enabled: false }, 'Chat is not configured.'],
+    [{ enabled: false }, 'Chat is temporarily unavailable.'],
     [{ enabled: true, provider: 'zai-coding-cn', modelId: 'unknown' }, 'Unsupported GLM'],
   ])('disables sending for unavailable configuration', async (config, message) => {
     vi.mocked(fetch).mockResolvedValue(Response.json(config))
@@ -281,5 +307,6 @@ describe('conversation', () => {
       target: { value: 'Draft' },
     })
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(document.body).not.toHaveTextContent('GLM_API_KEY')
   })
 })
