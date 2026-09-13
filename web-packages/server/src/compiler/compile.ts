@@ -21,7 +21,8 @@ import { projectStylesPlugin } from './resolve.js'
 import { createRuntimeLoader, runtimeVersion } from './runtime.js'
 import { compileStyles, StyleCompileError } from './styles.js'
 
-export const compilerVersion = '5'
+const compilerCodeVersion = '5'
+export const compilerVersion = `${compilerCodeVersion}-runtime-${runtimeVersion}`
 
 const diagnostic = ({ text, location }: Message): CompileDiagnostic => ({
   message: text,
