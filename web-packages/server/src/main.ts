@@ -1,4 +1,5 @@
 import { access } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { serve } from '@hono/node-server'
 import { readAgentConfig } from './agent/config.js'
@@ -17,6 +18,14 @@ const webRoot =
 if (webRoot) await access(`${webRoot}/index.html`)
 
 const hostname = process.env.HOST ?? '127.0.0.1'
-serve({ fetch: createApp(webRoot, readAgentConfig(process.env)).fetch, port, hostname }, info => {
-  console.info(`Gamma Compose: http://${hostname}:${info.port}`)
-})
+const dataRoot = resolve(process.env.GAMMA_DATA_DIR ?? '.gamma-data')
+serve(
+  {
+    fetch: createApp(webRoot, readAgentConfig(process.env), dataRoot).fetch,
+    port,
+    hostname,
+  },
+  info => {
+    console.info(`Gamma Compose: http://${hostname}:${info.port}`)
+  },
+)

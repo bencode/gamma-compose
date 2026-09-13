@@ -2,7 +2,9 @@ import { Agent } from '@earendil-works/pi-agent-core'
 import { createModels } from '@earendil-works/pi-ai'
 import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-cn'
 import type { AgentConfig } from '@gamma-compose/server/agent-contract'
+import type { ProjectRepository } from '../project/repository'
 import type { ProjectStore } from '../project/store'
+import { createAnalyzeImageTool } from './analyze-image-tool'
 import { builtInSkillFiles, builtInSkills } from './builtin-skills'
 import { type CompileProject, createCompileTool } from './compile-tool'
 import { createDbTools } from './db-tools'
@@ -27,6 +29,7 @@ export const createConversationAgent = (
   config: Extract<AgentConfig, { enabled: true }>,
   projectId: string,
   project: ProjectStore,
+  repository: ProjectRepository,
   preview: AgentPreview,
 ) => {
   const models = createModels()
@@ -34,7 +37,7 @@ export const createConversationAgent = (
   const model = models.getModel(config.provider, config.modelId)
   if (!model) throw new Error(`Unsupported GLM Coding Plan model: ${config.modelId}`)
 
-  const env = createProjectEnv(project, builtInSkillFiles)
+  const env = createProjectEnv(repository, builtInSkillFiles)
   return new Agent({
     toolExecution: 'sequential',
     initialState: {
@@ -42,7 +45,8 @@ export const createConversationAgent = (
       systemPrompt: createSystemPrompt(builtInSkills),
       thinkingLevel: 'low',
       tools: [
-        ...createFileTools(project, env),
+        ...createFileTools(repository, env),
+        createAnalyzeImageTool(repository),
         ...createDbTools(projectId, project),
         createCompileTool(preview.compile),
         createRefreshTool(preview.refresh),

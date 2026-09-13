@@ -3,33 +3,88 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { demoFiles, demoProject } from '../core/project/demo-project'
+import { demoProject } from '../core/project/demo-project'
+import { createProjectRepository } from '../core/project/repository'
 import { createProjectStore } from '../core/project/store'
 import { Workbench as WorkbenchView } from './workbench'
 
-const Workbench = () => {
-  const [project] = useState(() => createProjectStore(demoProject))
+const compiled = (previewUrl = '/__preview/test-project/1') => ({
+  ok: true,
+  build: {
+    projectId: 'test-project',
+    buildId: 'a'.repeat(64),
+    compilerVersion: '1',
+    entry: demoProject.entry,
+    files: {},
+    previewUrl,
+  },
+  warnings: [],
+})
+const missingTree = () =>
+  Response.json({ ok: false, reason: 'not-found', error: { message: 'Missing' } }, { status: 404 })
+
+type TestWorkbenchProps = {
+  attachment?: 'source' | 'stored'
+  deleteStoredFile?: (id: string) => Promise<void>
+}
+
+const Workbench = ({
+  attachment,
+  deleteStoredFile = async () => undefined,
+}: TestWorkbenchProps) => {
+  const [project] = useState(() => {
+    const store = createProjectStore(demoProject)
+    if (attachment === 'source') store.writeFile('attachments/generated.md', '# Generated')
+    return store
+  })
+  const [repository] = useState(() =>
+    createProjectRepository(
+      'test-project',
+      project,
+      {
+        getStoredFileContent: async id =>
+          id === 'stored-reference' ? new Blob(['# Stored']) : undefined,
+        saveStoredFiles: async () => undefined,
+        deleteStoredFile,
+      },
+      attachment === 'stored'
+        ? [
+            {
+              id: 'stored-reference',
+              projectId: 'test-project',
+              path: 'attachments/reference.md',
+              mediaType: 'text/markdown',
+              size: 8,
+              createdAt: 1,
+              updatedAt: 1,
+              revision: 1,
+            },
+          ]
+        : [],
+    ),
+  )
   return (
     <MemoryRouter>
       <WorkbenchView
         projectId="test-project"
         project={project}
+        repository={repository}
         projectName="Team workspace"
         saveStatus="saved"
         onRetrySave={() => undefined}
+        compilePersistence={{ load: async () => undefined, save: async () => undefined }}
       />
     </MemoryRouter>
   )
 }
 
 beforeEach(() => {
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async input =>
-    String(input) === '/api/agent/config'
-      ? Response.json({ enabled: false })
-      : new Response(JSON.stringify({ ok: true, js: 'export {}', css: '', warnings: [] }), {
-          headers: { 'Content-Type': 'application/json' },
-        }),
-  )
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const url = String(input)
+    if (url === '/api/agent/config') return Response.json({ enabled: false })
+    if (url.endsWith('/tree')) return missingTree()
+    return Response.json(compiled())
+  })
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -137,10 +192,11 @@ describe('workbench', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       if (String(input) === '/api/agent/config')
         return Response.json({ enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' })
-      if (String(input) === '/api/compile') {
+      if (String(input).endsWith('/builds')) {
         compileInputs.push(String(init?.body))
-        return Response.json({ ok: true, js: 'export {}', css: '', warnings: [] })
+        return Response.json(compiled())
       }
+      if (String(input).endsWith('/tree')) return missingTree()
       modelRequests += 1
       if (modelRequests === 1)
         return new Response(
@@ -174,8 +230,8 @@ describe('workbench', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(finish).toBeDefined())
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
-    expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).toHaveValue(updated)
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
+    expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     expect(compileInputs).toHaveLength(1)
     expect(screen.getByTitle('Project preview')).toBe(frame)
     act(() => {
@@ -199,7 +255,7 @@ describe('workbench', () => {
     })
     await screen.findByText('Compiled.', undefined, { timeout: 2_000 })
     expect(compileInputs).toHaveLength(2)
-    expect(JSON.parse(compileInputs[1] ?? '{}').files['src/app.tsx']).toBe(updated)
+    expect(JSON.parse(compileInputs[1] ?? '{}').changes['src/app.tsx']).toBe(updated)
     await user.click(screen.getByRole('tab', { name: 'Preview' }))
     expect(screen.getByTitle('Project preview')).toBe(refreshedFrame)
     expect(modelRequests).toBe(4)
@@ -212,22 +268,93 @@ describe('workbench', () => {
     expect(screen.getByRole('region', { name: 'Conversation' })).toBeEmptyDOMElement()
     expect(await screen.findByTitle('Project preview')).toBeInTheDocument()
     const tabs = within(screen.getByRole('tablist', { name: 'Output view' }))
-    await user.click(tabs.getByRole('tab', { name: 'Files' }))
-    const files = within(screen.getByRole('region', { name: 'File browser' }))
-    const source = screen.getByRole('region', { name: 'Source code' })
-    const code = within(source).getByRole('textbox')
+    await user.click(tabs.getByRole('tab', { name: 'Repository' }))
+    const files = within(screen.getByRole('region', { name: 'Repository browser' }))
+    const source = screen.getByRole('region', { name: 'Repository preview' })
+    const code = await within(source).findByRole('textbox', { name: 'src/app.tsx' })
     expect(within(source).getByRole('heading')).toHaveTextContent('src/app.tsx')
-    expect(code).toHaveValue(demoFiles['src/app.tsx'])
-    expect(code).toHaveAttribute('readonly')
+    expect(code).toHaveTextContent('Team workspace')
+    expect(code).toHaveAttribute('aria-readonly', 'true')
+    expect(code).toHaveAttribute('contenteditable', 'false')
+    expect(source.querySelector('.cm-lineNumbers')).toBeInTheDocument()
     expect(source.querySelector('table')).toBeNull()
+    expect(within(source).queryByRole('button', { name: 'Attach to message' })).toBeNull()
+    await user.click(files.getByRole('button', { name: 'Attach src/app.tsx to message' }))
+    expect(screen.getByRole('list', { name: 'Attachments' })).toHaveTextContent('app.tsx')
 
     await user.click(files.getByRole('button', { name: 'styles.css' }))
     expect(within(source).getByRole('heading')).toHaveTextContent('src/styles.css')
-    expect(within(source).getByRole('textbox')).toHaveValue(demoFiles['src/styles.css'])
+    expect(
+      await within(source).findByRole('textbox', { name: 'src/styles.css' }),
+    ).toHaveTextContent('text-wrap: balance')
+
+    await user.click(files.getByRole('button', { name: 'README.md' }))
+    expect(await within(source).findByTestId('markdown-content')).toHaveTextContent(
+      'Team workspace',
+    )
+    await user.click(files.getByRole('button', { name: 'Attach README.md to message' }))
+    expect(screen.getByRole('list', { name: 'Attachments' })).toHaveTextContent('README.md')
+  })
+
+  it('confirms attachment deletion inline and updates selection and the draft', async () => {
+    const user = userEvent.setup()
+    render(<Workbench attachment="source" />)
+    await screen.findByTitle('Project preview')
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
+    const files = within(screen.getByRole('region', { name: 'Repository browser' }))
+
+    await user.click(files.getByRole('button', { name: 'generated.md' }))
+    await user.click(
+      files.getByRole('button', { name: 'Attach attachments/generated.md to message' }),
+    )
+    expect(screen.getByRole('list', { name: 'Attachments' })).toHaveTextContent('generated.md')
+
+    await user.click(files.getByRole('button', { name: 'Delete attachments/generated.md' }))
+    await user.click(
+      files.getByRole('button', { name: 'Cancel deleting attachments/generated.md' }),
+    )
+    expect(files.getByRole('button', { name: 'generated.md' })).toBeInTheDocument()
+
+    await user.click(files.getByRole('button', { name: 'Delete attachments/generated.md' }))
+    await user.click(files.getByRole('button', { name: 'Confirm delete attachments/generated.md' }))
+    await waitFor(() =>
+      expect(files.queryByRole('button', { name: 'generated.md' })).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('list', { name: 'Attachments' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'src/main.tsx' })).toBeInTheDocument()
+  })
+
+  it('keeps an attachment available when deletion fails', async () => {
+    const user = userEvent.setup()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    render(
+      <Workbench
+        attachment="stored"
+        deleteStoredFile={async () => {
+          throw new Error('Storage failed')
+        }}
+      />,
+    )
+    await screen.findByTitle('Project preview')
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
+    const files = within(screen.getByRole('region', { name: 'Repository browser' }))
+
+    await user.click(files.getByRole('button', { name: 'Delete attachments/reference.md' }))
+    await user.click(files.getByRole('button', { name: 'Confirm delete attachments/reference.md' }))
+    expect(await files.findByRole('alert')).toHaveTextContent('Storage failed')
+    expect(files.getByRole('button', { name: 'reference.md' })).toBeInTheDocument()
+    expect(error).toHaveBeenCalled()
   })
 
   it('preserves draft, file selection, directories and preview across tabs', async () => {
     const user = userEvent.setup()
+    vi.mocked(fetch).mockImplementation(async input => {
+      const url = String(input)
+      if (url === '/api/agent/config')
+        return Response.json({ enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' })
+      if (url.endsWith('/tree')) return missingTree()
+      return Response.json(compiled())
+    })
     render(<Workbench />)
     const frame = await screen.findByTitle('Project preview')
     const draft = screen.getByRole('textbox', { name: 'Message' })
@@ -235,24 +362,24 @@ describe('workbench', () => {
 
     await user.click(draft)
     await user.paste('A team workspace')
-    await user.click(tabs.getByRole('tab', { name: 'Files' }))
-    const files = within(screen.getByRole('region', { name: 'File browser' }))
+    await user.click(tabs.getByRole('tab', { name: 'Repository' }))
+    const files = within(screen.getByRole('region', { name: 'Repository browser' }))
     await user.click(files.getByRole('button', { name: 'styles.css' }))
     await user.click(files.getByRole('button', { name: 'src' }))
     await user.click(tabs.getByRole('tab', { name: 'Preview' }))
-    expect(screen.queryByRole('region', { name: 'File browser' })).not.toBeInTheDocument()
-    await user.click(tabs.getByRole('tab', { name: 'Files' }))
+    expect(screen.queryByRole('region', { name: 'Repository browser' })).not.toBeInTheDocument()
+    await user.click(tabs.getByRole('tab', { name: 'Repository' }))
 
     expect(screen.getByTitle('Project preview')).toBe(frame)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(3)
     expect(draft).toHaveValue('A team workspace')
-    const visibleFiles = within(screen.getByRole('region', { name: 'File browser' }))
+    const visibleFiles = within(screen.getByRole('region', { name: 'Repository browser' }))
     expect(visibleFiles.getByRole('button', { name: 'src' })).toHaveAttribute(
       'aria-expanded',
       'false',
     )
     expect(screen.getByRole('heading', { name: 'src/styles.css' })).toBeVisible()
-    expect(screen.getByRole('button', { name: /Send/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Send/ })).toBeEnabled()
     await user.click(visibleFiles.getByRole('button', { name: 'src' }))
     expect(visibleFiles.getByRole('button', { name: 'styles.css' })).toHaveAttribute(
       'aria-current',
@@ -294,7 +421,8 @@ describe('workbench', () => {
           { headers: { 'Content-Type': 'text/event-stream' } },
         )
       }
-      return Response.json({ ok: true, js: 'export {}', css: '', warnings: [] })
+      if (String(input).endsWith('/tree')) return missingTree()
+      return Response.json(compiled())
     })
     render(<Workbench />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
@@ -303,7 +431,7 @@ describe('workbench', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(stream).toBeDefined())
-    fireEvent.click(screen.getByRole('tab', { name: 'Files' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Repository' }))
     act(() => {
       desktop = true
       listeners.forEach(notify => {

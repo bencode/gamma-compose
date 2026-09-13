@@ -8,10 +8,13 @@ import {
   useDefaultLayout,
 } from 'react-resizable-panels'
 import { Link } from 'react-router-dom'
+import type { ProjectCompileState } from '../core/project/records'
+import type { ProjectRepository } from '../core/project/repository'
 import type { ProjectStore } from '../core/project/store'
 import { ConversationPanel } from '../features/conversation/conversation-panel'
 import { useConversation } from '../features/conversation/use-conversation'
-import { FileBrowser } from '../features/files/file-browser'
+import { useMessageAttachments } from '../features/conversation/use-message-attachments'
+import { RepositoryBrowser } from '../features/files/repository-browser'
 import { PreviewPanel } from '../features/preview/preview-panel'
 import { usePreview } from '../features/preview/use-preview'
 
@@ -70,23 +73,30 @@ const mobileLayoutStorage: LayoutStorage = {
 type WorkbenchProps = {
   projectId: string
   project: ProjectStore
+  repository: ProjectRepository
   projectName: string
   saveStatus: 'saving' | 'saved' | 'error'
   saveError?: string
   onRetrySave: () => void
+  compilePersistence: {
+    load: () => Promise<ProjectCompileState | undefined>
+    save: (state: ProjectCompileState) => Promise<void>
+  }
 }
 
 export const Workbench = ({
   projectId,
   project,
+  repository,
   projectName,
   saveStatus,
   saveError,
   onRetrySave,
+  compilePersistence,
 }: WorkbenchProps) => {
-  const snapshot = useSyncExternalStore(project.subscribe, project.getSnapshot)
-  const preview = usePreview(projectId, project)
-  const conversation = useConversation(projectId, project, preview)
+  const preview = usePreview(projectId, project, repository, compilePersistence)
+  const attachments = useMessageAttachments(repository)
+  const conversation = useConversation(projectId, project, repository, attachments, preview)
   const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot)
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: 'gamma-compose-workbench-desktop',
@@ -95,7 +105,7 @@ export const Workbench = ({
   })
   const [view, setView] = useState('preview')
   const [selectedPath, setSelectedPath] = useState('src/app.tsx')
-  const [expandedDirectories, setExpandedDirectories] = useState(['src'])
+  const [expandedDirectories, setExpandedDirectories] = useState(['src', 'attachments'])
 
   const toggleDirectory = (path: string) =>
     setExpandedDirectories(current =>
@@ -120,7 +130,7 @@ export const Workbench = ({
           groupResizeBehavior={isDesktop ? 'preserve-pixel-size' : 'preserve-relative-size'}
         >
           <aside
-            className="flex h-full min-h-0 min-w-0 flex-col bg-panel max-[899px]:border-b max-[899px]:border-line"
+            className="conversation-workspace flex h-full min-h-0 min-w-0 flex-col bg-panel max-[899px]:border-b max-[899px]:border-line"
             aria-label="Conversation workspace"
           >
             <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-line pr-3 pl-4">
@@ -141,26 +151,23 @@ export const Workbench = ({
                 <Tabs.Trigger className="view-tab" value="preview">
                   Preview
                 </Tabs.Trigger>
-                <Tabs.Trigger className="view-tab" value="files">
-                  Files
+                <Tabs.Trigger className="view-tab" value="repository">
+                  Repository
                 </Tabs.Trigger>
               </Tabs.List>
             </header>
-            <ConversationPanel {...conversation} />
-            <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-2 text-xs text-muted">
-              <span role={saveStatus === 'error' ? 'alert' : 'status'} title={saveError}>
-                {saveStatus === 'saving'
-                  ? 'Saving…'
-                  : saveStatus === 'error'
-                    ? 'Save failed'
-                    : 'Saved'}
-              </span>
-              {saveStatus === 'error' && (
-                <button type="button" className="text-accent underline" onClick={onRetrySave}>
-                  Retry save
-                </button>
-              )}
-            </div>
+            <ConversationPanel
+              {...conversation}
+              saveStatus={saveStatus}
+              saveError={saveError}
+              onRetrySave={onRetrySave}
+              repository={repository}
+              attachments={attachments}
+              onOpenRepositoryFile={path => {
+                setSelectedPath(path)
+                setView('repository')
+              }}
+            />
           </aside>
         </Panel>
         {isDesktop && (
@@ -179,13 +186,22 @@ export const Workbench = ({
                 }
               />
             </Tabs.Content>
-            <Tabs.Content className="output-panel" value="files">
-              <FileBrowser
-                files={snapshot.files}
+            <Tabs.Content className="output-panel" value="repository">
+              <RepositoryBrowser
+                repository={repository}
+                files={attachments.files}
                 selectedPath={selectedPath}
                 expandedDirectories={expandedDirectories}
                 onSelectFile={setSelectedPath}
                 onToggleDirectory={toggleDirectory}
+                onAttach={path => attachments.attachPaths([path])}
+                onDelete={async path => {
+                  await repository.deleteFile(path)
+                  attachments.detachPath(path)
+                  setSelectedPath(current =>
+                    current === path ? project.getSnapshot().entry : current,
+                  )
+                }}
               />
             </Tabs.Content>
           </main>

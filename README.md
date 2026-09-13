@@ -6,8 +6,8 @@ isolated preview.
 
 ## Current iteration: Template gallery and local projects
 
-- A resizable conversation panel and full-height preview or read-only file browser.
-- One project entry and a collection of text files submitted to the compiler.
+- A resizable conversation panel and full-height preview or syntax-highlighted, read-only file browser.
+- One project entry and a browser-owned text-file tree compiled into static ESM modules.
 - React, built-in shadcn/Radix components, Tailwind CSS 4, and ordinary CSS bundled together.
 - A runnable team workspace with project search, a status filter, and a dialog.
 - A gallery with Blank, Team workspace, and Product showcase templates.
@@ -15,6 +15,7 @@ isolated preview.
 - Compilation diagnostics, preview loading errors, runtime errors, and retry.
 - All project copy, comments, and documentation are in English.
 - A browser-side Pi Agent with multi-turn GLM Coding Plan chat, streaming replies, and Stop.
+- One compact composer surface showing browser-local save state and the active model.
 - Browser-local file and structured-data tools, plus explicit `compile` and `refresh_preview`.
 - Agent file changes immediately appear in Files; compile caches a build and refresh loads it.
 - Project-scoped application data backed by host-owned IndexedDB and validated JSON resource models.
@@ -37,16 +38,17 @@ Open `/` to choose a template or an existing project. Choosing a template create
 an independent copy and opens `/projects/:projectId`; choosing an existing project
 reopens it without copying. The workbench's back arrow returns to the gallery.
 
-The `gamma-compose` IndexedDB database (version 1) has `templates` and `projects`
-stores keyed by `id`. Templates are seeded only when the database is created.
+The `gamma-compose` IndexedDB database (version 2) has `templates`, `projects`, and
+`compileStates` stores. Templates are seeded only when the database is created.
 Each project stores its name, last-modified timestamp, entry and complete text
-file collection. Template updates do not overwrite existing browser data.
+file collection. Compile state stores the last successful server build tree by
+project ID. Template updates do not overwrite existing browser data.
 
-Every valid file change submits a complete snapshot without a debounce. `Saved`
-means the latest snapshot's database transaction completed. On `Save failed`,
-changes remain in memory and Retry save resubmits them. Wait for `Saved` before
-closing the page; only committed changes survive a forced close. Reopening
-compiles the saved source again; compiled bundles are not persisted.
+Every valid file change submits a complete snapshot without a debounce. `Local ✓`
+means the latest snapshot's database transaction completed. On `Save failed · Retry`,
+changes remain in memory and Retry resubmits them. Wait for `Local ✓` before
+closing the page; only committed changes survive a forced close. Reopening verifies
+the saved compile state against the server's current derived tree and rebuilds when needed.
 
 Projects belong to this browser and origin. URLs do not share project data with
 other devices. Clearing site data removes projects; browser storage is not a cloud
@@ -83,12 +85,15 @@ are not loaded automatically.
 Set `GLM_API_KEY` in the server's shell or deployment environment before running
 `pnpm dev` or `pnpm start`. Never put it in a `VITE_` variable or browser storage.
 `GLM_MODEL` defaults to `glm-5.3`; another value must exist in the pinned Pi
-GLM Coding CN model catalog. There is no browser model selector or silent fallback.
+GLM Coding CN model catalog. The composer displays the active model returned by this
+configuration. This iteration has no browser-side provider configuration, model switching,
+or silent fallback; the disabled control only establishes the future frontend contract.
 
 The upstream is fixed to `https://open.bigmodel.cn/api/coding/paas/v4`.
 Use a GLM Coding Plan credential and confirm that your intended use is permitted
 by your provider subscription. Ordinary API credentials are not interchangeable.
-Without a key, chat is disabled while compilation and preview remain available.
+Without a key, chat is shown as temporarily unavailable while compilation and preview
+remain available. Provider credential names and setup details are not shown in the UI.
 
 The Node service listens on `127.0.0.1` by default; `HOST` can override this for a
 controlled deployment. This iteration has no user authentication, rate limiting,
@@ -109,8 +114,10 @@ their own access control before making it remotely accessible.
   request and propagates cancellation upstream; it cannot undo provider charges.
 - Partial responses remain visible after failure or cancellation. Pi excludes
   failed/aborted assistant messages from subsequent model requests.
-- Replies are plain text, not executable HTML or rendered Markdown. Internal
-  reasoning is not displayed. Refresh clears the conversation and draft.
+- Assistant text renders as safe GFM Markdown; raw HTML is not executed. Pi
+  thinking and tool activity appear in disclosures. Live activity shows its step
+  list and folds after completion; each step can reveal bounded input or output.
+  User text stays literal. Refresh clears the conversation and draft.
 
 ### Chat acceptance checks
 
@@ -146,14 +153,20 @@ pnpm start
 ## Compilation contract
 
 ```http
-POST /api/compile
+GET /api/compiler/projects/:projectId/tree
+
+POST /api/compiler/projects/:projectId/builds
 Content-Type: application/json
 ```
 
 ```ts
-type CompileInput = {
+type SourceFileDescriptor = { hash: string; bytes: number }
+
+type CompileBuildInput = {
+  baseBuildId: string | null
   entry: string
-  files: Record<string, string>
+  sourceTree: Record<string, SourceFileDescriptor>
+  changes: Record<string, string>
 }
 
 type CompileDiagnostic = {
@@ -163,9 +176,30 @@ type CompileDiagnostic = {
   column?: number
 }
 
+type CompiledFile = {
+  kind: 'module' | 'style'
+  sourceHash: string
+  sourceBytes: number
+  outputHash: string
+  outputPath: string
+}
+
+type CompiledTree = {
+  projectId: string
+  buildId: string
+  compilerVersion: string
+  entry: string
+  files: Record<string, CompiledFile>
+  previewUrl: string
+}
+
 type CompileResult =
-  | { ok: true; js: string; css: string; warnings: CompileDiagnostic[] }
-  | { ok: false; errors: CompileDiagnostic[] }
+  | { ok: true; build: CompiledTree; warnings: CompileDiagnostic[] }
+  | {
+      ok: false
+      reason: 'invalid-input' | 'stale-tree' | 'compile'
+      errors: CompileDiagnostic[]
+    }
 ```
 
 The example entry, src/main.tsx, mounts the application into #root. The compiler
@@ -173,25 +207,48 @@ does not require a particular component export or execute the entry on the serve
 
 Limits and resolution:
 
-- Maximum request body: 2 MiB. Between 1 and 128 text files.
+- Maximum request body: 17 MiB. A project may contain 1 to 1,024 text files and
+  up to 16 MiB of serialized project data.
 - File keys must be canonical project-relative paths.
-- Local TS, TSX, JS, JSX, JSON, and CSS imports resolve only inside the submitted file collection.
+- The complete `sourceTree` is sent on every build. `changes` normally contains only
+  new or changed source text. When source paths are added or deleted, it also contains
+  every non-CSS module so extensionless imports can be resolved again. Deleting a file
+  means omitting it from `sourceTree`.
+- Local TS, TSX, JS, JSX, JSON, and CSS imports resolve only inside the declared source tree.
+- Literal dynamic imports such as `import('./pages/settings')` are supported;
+  computed dynamic import paths are rejected.
 - Direct package imports: react, react/jsx-runtime, react/jsx-dev-runtime,
   react-dom, react-dom/client, react-router-dom, @gamma-compose/ui,
   @gamma-compose/ui/styles.css, and @gamma-compose/local-db.
 - CSS may import tailwindcss. Built-in component dependencies come from the installed workspace.
 - Unknown packages, remote modules, filesystem escapes, custom Tailwind plugins,
   JavaScript configuration, and @source directory scanning are rejected.
-- No per-request package installation, project directories, build scripts, or artifact storage.
+- No per-request package installation or project build scripts.
 - HTTP statuses: 200 success, 400 invalid input, 413 request too large,
-  422 compilation failure, 500 unexpected service failure.
+  409 stale compiled tree, 422 compilation failure, 500 unexpected service failure.
 - Diagnostics use one-based lines and columns when a project location is available.
   Runtime errors are not mapped back to TSX; full TypeScript type checking is not included.
 
-Tailwind scans the submitted source text and the built-in component sources.
+Tailwind scans all compiled project modules and the built-in component sources.
 Use complete class names, not expressions such as bg-${color}-500. Custom CSS
-and theme variables are supported. CSS and JavaScript are returned together;
-loading JavaScript alone is insufficient.
+and theme variables are supported.
+
+The browser owns the complete source workspace in IndexedDB and keeps the latest
+successful compiled tree in a separate `compileStates` record. The server stores no
+source workspace or Agent session. It only publishes rebuildable derived artifacts
+under `GAMMA_DATA_DIR` (default `.gamma-data`). If that directory is removed, the tree
+endpoint returns 404 and the browser reconstructs the build from its local project.
+A 409 means another build changed the current derived tree; the browser reads it and
+retries once. Failed builds never replace the current build.
+
+Every declared source module becomes a separate browser ESM file. Local import
+specifiers stay unchanged; build-scoped static resolution redirects extensionless
+imports to one canonical output URL. Unchanged module and stylesheet artifacts are
+hard-linked into the next immutable build, while changed files are transformed again.
+React, React DOM, React Router, the built-in UI, and the local database preview client
+come from one shared, precompiled runtime import map, preserving a single React instance.
+Independent CSS artifacts are reused; final CSS and Tailwind output are rebuilt as one
+build stylesheet.
 
 ## Built-in components
 
@@ -208,9 +265,11 @@ license for Gamma Compose itself.
 ## Preview boundary
 
 The preview runs in an iframe with sandbox="allow-scripts", without same-origin
-permission. It owns its DOM, CSS, and React instance. The host sends compiled
-contents to the frame; the frame loads a local Blob and reports lifecycle errors
-through source-checked window messages. A transferred MessagePort proxies local
+permission. It owns its DOM and CSS. Its `src` points to the immutable preview URL,
+which loads compiled ESM and runtime files through the server's static middleware.
+Static responses allow the sandbox's opaque `Origin: null` without granting the
+iframe same-origin access. The frame reports lifecycle errors through source-checked
+window messages. A transferred MessagePort proxies local
 database calls to the host; IndexedDB and Ajv do not run in the iframe.
 
 The preview CSP blocks fetch requests, remote scripts and styles, form submission,

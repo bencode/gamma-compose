@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { createPreviewDocument, isPreviewMessage, type PreviewMessage } from './preview-document'
+import { useEffect, useRef } from 'react'
+import { isPreviewMessage, type PreviewMessage } from './preview-document'
 import type { PreviewState } from './use-preview'
 
 type PreviewPanelProps = {
@@ -7,6 +7,7 @@ type PreviewPanelProps = {
   retry: () => void
   onMessage: (message: PreviewMessage) => void
   openDatabaseBridge: (port: MessagePort) => () => void
+  openAssetBridge: (port: MessagePort) => () => void
   retryDisabled?: boolean
 }
 
@@ -21,11 +22,12 @@ export const PreviewPanel = ({
   retry,
   onMessage,
   openDatabaseBridge,
+  openAssetBridge,
   retryDisabled = false,
 }: PreviewPanelProps) => {
   const frame = useRef<HTMLIFrameElement>(null)
   const closeDatabaseBridge = useRef<() => void>(undefined)
-  const [document] = useState(createPreviewDocument)
+  const closeAssetBridge = useRef<() => void>(undefined)
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
       if (
@@ -42,6 +44,7 @@ export const PreviewPanel = ({
   useEffect(
     () => () => {
       closeDatabaseBridge.current?.()
+      closeAssetBridge.current?.()
     },
     [],
   )
@@ -49,13 +52,15 @@ export const PreviewPanel = ({
   const renderPreview = () => {
     if (!state.frame) return
     closeDatabaseBridge.current?.()
-    const channel = new MessageChannel()
-    closeDatabaseBridge.current = openDatabaseBridge(channel.port1)
-    frame.current?.contentWindow?.postMessage(
-      { type: 'preview:render', js: state.frame.result.js, css: state.frame.result.css },
-      '*',
-      [channel.port2],
-    )
+    closeAssetBridge.current?.()
+    const databaseChannel = new MessageChannel()
+    const assetChannel = new MessageChannel()
+    closeDatabaseBridge.current = openDatabaseBridge(databaseChannel.port1)
+    closeAssetBridge.current = openAssetBridge(assetChannel.port1)
+    frame.current?.contentWindow?.postMessage({ type: 'preview:start' }, '*', [
+      databaseChannel.port2,
+      assetChannel.port2,
+    ])
   }
 
   return (
@@ -72,7 +77,7 @@ export const PreviewPanel = ({
             ref={frame}
             title="Project preview"
             sandbox="allow-scripts"
-            srcDoc={document}
+            src={state.frame.result.build.previewUrl}
             className="preview-frame"
             onLoad={renderPreview}
           />

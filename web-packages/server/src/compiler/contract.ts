@@ -1,6 +1,15 @@
-export type CompileInput = {
+export type SourceFileDescriptor = {
+  hash: string
+  bytes: number
+}
+
+export type SourceTree = Record<string, SourceFileDescriptor>
+
+export type CompileBuildInput = {
+  baseBuildId: string | null
   entry: string
-  files: Record<string, string>
+  sourceTree: SourceTree
+  changes: Record<string, string>
 }
 
 export type CompileDiagnostic = {
@@ -10,6 +19,29 @@ export type CompileDiagnostic = {
   column?: number
 }
 
-export type CompileResult =
-  | { ok: true; js: string; css: string; warnings: CompileDiagnostic[] }
-  | { ok: false; errors: CompileDiagnostic[] }
+export type CompiledFile = {
+  kind: 'module' | 'style' | 'asset'
+  sourceHash: string
+  sourceBytes: number
+  outputHash: string
+  outputPath: string
+}
+
+export type CompiledTree = {
+  projectId: string
+  buildId: string
+  compilerVersion: string
+  entry: string
+  files: Record<string, CompiledFile>
+  previewUrl: string
+}
+
+export type CompileBuildResult =
+  | { ok: true; build: CompiledTree; warnings: CompileDiagnostic[] }
+  | {
+      ok: false
+      reason: 'invalid-input' | 'stale-tree' | 'compile'
+      errors: CompileDiagnostic[]
+    }
+
+export type CompileResult = CompileBuildResult

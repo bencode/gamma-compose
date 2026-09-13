@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-11T16:56:35+08:00",
+  "title": "Design System: Gamma Compose",
+  "extensions": {
+    "colorMeta": {
+      "workspace": {
+        "role": "neutral",
+        "displayName": "Workspace Mist",
+        "canonical": "#f5f7fa",
+        "tonalRamp": [
+          "#192332",
+          "#344052",
+          "#526174",
+          "#7e8a9a",
+          "#aeb8c5",
+          "#d8e0eb",
+          "#eef2f7",
+          "#f5f7fa"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Workbench Blue",
+        "canonical": "#2457d6",
+        "tonalRamp": [
+          "#0c1e4d",
+          "#12317f",
+          "#1944ad",
+          "#2457d6",
+          "#5d7fe1",
+          "#91a8eb",
+          "#c5d2f5",
+          "#eff3ff"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Interface Body",
+        "purpose": "Conversation and application UI."
+      },
+      "code": {
+        "displayName": "Source Code",
+        "purpose": "Source files and the Gamma Compose wordmark."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "160ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Hover, focus, and enabled-state feedback."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "desktop-workbench",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Icon Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Compact send or stop action inside the composer.",
+      "html": "<button class=\"ds-icon-button\" aria-label=\"Send\">↑</button>",
+      "css": ".ds-icon-button { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:6px; color:var(--color-panel); background:var(--color-accent); } .ds-icon-button:hover { filter:brightness(.95); } .ds-icon-button:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }"
+    },
+    {
+      "name": "Composer Surface",
+      "kind": "input",
+      "refersTo": "input-surface",
+      "description": "One flat boundary groups the prompt and its local context.",
+      "html": "<div class=\"ds-composer\"><textarea placeholder=\"Describe what you want to build…\"></textarea><small>Local ✓ · GLM 5.3</small></div>",
+      "css": ".ds-composer { padding:10px; border:1px solid var(--color-line); border-radius:8px; color:var(--color-ink); background:var(--color-panel); } .ds-composer:focus-within { border-color:var(--color-accent); } .ds-composer textarea { width:100%; min-height:56px; resize:none; border:0; color:inherit; background:transparent; } .ds-composer small { color:var(--color-muted); }"
+    },
+    {
+      "name": "Active Tab",
+      "kind": "nav",
+      "refersTo": "tab-active",
+      "description": "Compact output-view selection.",
+      "html": "<button class=\"ds-tab\">Preview</button>",
+      "css": ".ds-tab { padding:4px 10px; border:0; border-radius:5px; color:var(--color-accent); background:color-mix(in srgb, var(--color-accent) 9%, var(--color-panel)); font-size:12px; font-weight:600; } .ds-tab:hover { filter:brightness(.98); } .ds-tab:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; }"
+    },
+    {
+      "name": "Model Control",
+      "kind": "custom",
+      "description": "A low-priority model label that becomes selectable when real options exist.",
+      "html": "<label class=\"ds-model\"><span>Model</span><select><option>GLM 5.3</option></select></label>",
+      "css": ".ds-model { display:inline-flex; align-items:center; gap:4px; color:var(--color-muted); font-size:11px; } .ds-model select { border:0; border-radius:4px; padding:4px 6px; color:inherit; background:transparent; } .ds-model select:hover { color:var(--color-ink); background:var(--color-workspace); } .ds-model select:focus-visible { outline:2px solid var(--color-accent); }"
+    },
+    {
+      "name": "Persistence State",
+      "kind": "custom",
+      "description": "Truthful browser-local save status with inline recovery.",
+      "html": "<button class=\"ds-persistence\">Save failed · Retry</button>",
+      "css": ".ds-persistence { border:0; border-radius:4px; padding:4px; color:#a33b14; background:transparent; font-size:11px; } .ds-persistence:hover { background:color-mix(in srgb, #a33b14 8%, var(--color-panel)); } .ds-persistence:focus-visible { outline:2px solid var(--color-accent); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Instrument Panel",
+    "overview": "A compact developer tool that uses flat surfaces, cool neutrals, and explicit state so the interface recedes behind the work.",
+    "keyCharacteristics": [
+      "Compact controls",
+      "Flat structural boundaries",
+      "One restrained action color",
+      "Truthful local state"
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "Blue is reserved for an action, selection, or focus state.",
+        "section": "colors"
+      },
+      {
+        "name": "The Flat Boundary Rule",
+        "body": "Do not combine a structural border with a diffuse shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep persistence and model state close to the composer.",
+      "Do preserve keyboard and narrow-panel usability."
+    ],
+    "donts": [
+      "Don't expose provider infrastructure as user-facing status.",
+      "Don't add unavailable controls as placeholders."
+    ]
+  }
+}

@@ -2,11 +2,24 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { demoProject } from '../../core/project/demo-project'
+import { createProjectRepository } from '../../core/project/repository'
 import { createProjectStore } from '../../core/project/store'
 import { ConversationPanel } from './conversation-panel'
 import { useConversation } from './use-conversation'
+import { prepareClipboardFiles, useMessageAttachments } from './use-message-attachments'
 
-const compile = async () => ({ ok: true as const, js: '', css: '', warnings: [] })
+const compile = async () => ({
+  ok: true as const,
+  build: {
+    projectId: 'test-project',
+    buildId: 'a'.repeat(64),
+    compilerVersion: '1',
+    entry: 'src/main.tsx',
+    files: {},
+    previewUrl: '/__preview/test-project/1',
+  },
+  warnings: [],
+})
 const refresh = async () => ({ refreshed: true as const, buildId: 1 })
 const preview = {
   compile,
@@ -16,7 +29,25 @@ const preview = {
 }
 const ConnectedConversation = () => {
   const [project] = useState(() => createProjectStore(demoProject))
-  return <ConversationPanel {...useConversation('test-project', project, preview)} />
+  const [repository] = useState(() =>
+    createProjectRepository(
+      'test-project',
+      project,
+      { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
+      [],
+    ),
+  )
+  const attachments = useMessageAttachments(repository)
+  return (
+    <ConversationPanel
+      {...useConversation('test-project', project, repository, attachments, preview)}
+      saveStatus="saved"
+      onRetrySave={() => undefined}
+      repository={repository}
+      attachments={attachments}
+      onOpenRepositoryFile={() => undefined}
+    />
+  )
 }
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
   new TextEncoder().encode(
@@ -59,6 +90,73 @@ const sendMessage = async (text: string) => {
 }
 
 describe('conversation', () => {
+  it('gives generic clipboard images short unique names', () => {
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue('a3f91c00-0000-4000-8000-000000000000')
+    const generic = new File(['image'], 'image.png', { type: 'image/png', lastModified: 42 })
+    const named = new File(['image'], 'diagram.png', { type: 'image/png' })
+
+    const [renamed, unchanged] = prepareClipboardFiles([generic, named])
+
+    expect(renamed?.name).toBe('image-a3f91c.png')
+    expect(renamed?.type).toBe('image/png')
+    expect(renamed?.lastModified).toBe(42)
+    expect(unchanged).toBe(named)
+  })
+
+  it('keeps successful persistence and the configured model out of the composer', async () => {
+    render(<ConnectedConversation />)
+
+    await screen.findByRole('button', { name: 'Attach files' })
+    expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('Local')
+    expect(document.body).not.toHaveTextContent('GLM-5.3')
+    expect(document.body).not.toHaveTextContent('GLM_API_KEY')
+  })
+
+  it('uploads Markdown, sends an attachment-only request and hides the internal manifest', async () => {
+    const view = render(<ConnectedConversation />)
+    await screen.findByRole('button', { name: 'Attach files' })
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')
+    if (!input) throw new Error('Expected a file input')
+    fireEvent.change(input, {
+      target: {
+        files: [new File(['# Requirements'], 'requirements.md', { type: 'text/markdown' })],
+      },
+    })
+
+    expect(await screen.findByText('requirements.md')).toBeInTheDocument()
+    const send = screen.getByRole('button', { name: 'Send' })
+    await waitFor(() => expect(send).toBeEnabled())
+    fireEvent.click(send)
+    await waitFor(() => expect(streams).toHaveLength(1))
+
+    const payload = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body))
+    expect(JSON.stringify(payload.messages)).toContain('attachments/requirements.md')
+    expect(screen.getByRole('article', { name: 'You' })).not.toHaveTextContent(
+      'attached_project_files',
+    )
+  })
+
+  it('keeps both duplicate uploads without interrupting the composer', async () => {
+    const view = render(<ConnectedConversation />)
+    await screen.findByRole('button', { name: 'Attach files' })
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')
+    if (!input) throw new Error('Expected a file input')
+    const upload = (content: string) =>
+      fireEvent.change(input, {
+        target: {
+          files: [new File([content], 'requirements.md', { type: 'text/markdown' })],
+        },
+      })
+
+    upload('first')
+    expect(await screen.findByText('requirements.md')).toBeInTheDocument()
+    upload('second')
+    expect(await screen.findByText('requirements (2).md')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Keep both' })).not.toBeInTheDocument()
+  })
+
   it.each([null, [], 7, 'invalid'].map(args => ({ args })))(
     'recovers from invalid tool arguments $args without losing the conversation',
     async ({ args }) => {
@@ -86,7 +184,9 @@ describe('conversation', () => {
         })
       finishTool(0, 'invalid-tool', args)
       await waitFor(() => expect(streams).toHaveLength(2))
-      expect(screen.getByRole('list', { name: 'Tool activity' })).toHaveTextContent('Failed')
+      expect(
+        screen.getByRole('button', { name: /1 step.*1 read.*1 failed.*Running/i }),
+      ).toBeInTheDocument()
       const payload = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body))
       expect(payload.messages).toEqual(
         expect.arrayContaining([
@@ -103,14 +203,18 @@ describe('conversation', () => {
       )
       finishTool(1, 'valid-tool', { path: 'src/main.tsx' })
       await waitFor(() => expect(streams).toHaveLength(3))
-      expect(screen.getAllByRole('list', { name: 'Tool activity' }).at(-1)).toHaveTextContent(
-        'Completed',
-      )
+      expect(
+        screen.getByRole('button', { name: /read.*src\/main\.tsx.*Completed/i }),
+      ).toHaveAttribute('aria-expanded', 'false')
       act(() => {
         streams[2]?.enqueue(event({ content: 'Read successfully.' }, 'stop'))
         streams[2]?.close()
       })
       await screen.findByText('Read successfully.')
+      expect(screen.getByRole('button', { name: /2 steps.*2 read.*1 failed/i })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
       await sendMessage('Continue the discussion')
       await waitFor(() => expect(streams).toHaveLength(4))
       act(() => {
@@ -123,7 +227,7 @@ describe('conversation', () => {
     },
   )
 
-  it('shows tool status without file contents and can stop and resume after a completed write', async () => {
+  it('keeps tool contents behind disclosures and can stop and resume after a completed write', async () => {
     render(<ConnectedConversation />)
     await sendMessage('Create a component')
     await waitFor(() => expect(streams).toHaveLength(1))
@@ -151,16 +255,21 @@ describe('conversation', () => {
       )
       streams[0]?.close()
     })
-    expect(await screen.findByRole('list', { name: 'Tool activity' })).toHaveTextContent(
-      'writesrc/new.tsxCompleted',
-    )
+    const writeStep = await screen.findByRole('button', {
+      name: /write.*src\/new\.tsx.*Completed/i,
+    })
+    expect(writeStep).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/hiddenFileContent/)).not.toBeInTheDocument()
+    fireEvent.click(writeStep)
+    expect(screen.getByText(/hiddenFileContent/)).toBeInTheDocument()
+    fireEvent.click(writeStep)
     expect(screen.queryByText(/hiddenFileContent/)).not.toBeInTheDocument()
     await waitFor(() => expect(streams).toHaveLength(2))
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Stopping…' })).not.toBeInTheDocument(),
     )
-    expect(screen.getByRole('list', { name: 'Tool activity' })).toHaveTextContent('Completed')
+    expect(writeStep).toHaveTextContent('Completed')
     await sendMessage('Read the file')
     await waitFor(() => expect(streams).toHaveLength(3))
     act(() => {
@@ -185,13 +294,16 @@ describe('conversation', () => {
       streams[2]?.close()
     })
     await waitFor(() => expect(streams).toHaveLength(4))
-    expect(screen.getAllByRole('list', { name: 'Tool activity' }).at(-1)).toHaveTextContent(
-      'readsrc/new.tsxCompleted',
-    )
+    const readStep = screen.getByRole('button', {
+      name: /read.*src\/new\.tsx.*Completed/i,
+    })
+    expect(readStep).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText(/hiddenFileContent/)).not.toBeInTheDocument()
+    fireEvent.click(readStep)
+    expect(screen.getByText(/hiddenFileContent/)).toBeInTheDocument()
   })
 
-  it('streams text without exposing reasoning and preserves the next draft', async () => {
+  it('streams reasoning and text while preserving the next draft', async () => {
     render(
       <StrictMode>
         <ConnectedConversation />
@@ -202,8 +314,9 @@ describe('conversation', () => {
     expect(screen.getByRole('article', { name: 'You' })).toHaveTextContent('Hello')
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('')
     act(() => streams[0]?.enqueue(event({ reasoning_content: 'Private reasoning' })))
-    expect(await screen.findByText('Thinking…')).toBeInTheDocument()
-    expect(screen.queryByText('Private reasoning')).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: /Thinking.*Private reasoning/i }),
+    ).toHaveAttribute('aria-expanded', 'false')
     act(() => streams[0]?.enqueue(event({ content: 'First part' })))
     expect(await screen.findByText('First part')).toBeInTheDocument()
     const input = screen.getByRole('textbox', { name: 'Message' })
@@ -271,7 +384,7 @@ describe('conversation', () => {
   })
 
   it.each([
-    [{ enabled: false }, 'Chat is not configured.'],
+    [{ enabled: false }, 'Chat is temporarily unavailable.'],
     [{ enabled: true, provider: 'zai-coding-cn', modelId: 'unknown' }, 'Unsupported GLM'],
   ])('disables sending for unavailable configuration', async (config, message) => {
     vi.mocked(fetch).mockResolvedValue(Response.json(config))
@@ -281,5 +394,6 @@ describe('conversation', () => {
       target: { value: 'Draft' },
     })
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(document.body).not.toHaveTextContent('GLM_API_KEY')
   })
 })

@@ -1,25 +1,55 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { compileFiles } from '../compile/client'
 import { demoProject } from '../project/demo-project'
+import { createProjectRepository } from '../project/repository'
 import { createProjectStore } from '../project/store'
+import { createAnalyzeImageTool } from './analyze-image-tool'
 import { createCompileTool } from './compile-tool'
 import { type AgentPreview, createConversationAgent } from './runtime'
 
 const config = { enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' } as const
+const compileInput = (files: typeof demoProject) => ({
+  baseBuildId: null,
+  entry: files.entry,
+  sourceTree: {},
+  changes: { ...files.files },
+})
+const build = {
+  projectId: 'test-project',
+  buildId: 'a'.repeat(64),
+  compilerVersion: '1',
+  entry: 'src/main.tsx',
+  files: {},
+  previewUrl: '/__preview/test-project/1',
+}
 const createPreview = (changes: Partial<AgentPreview> = {}): AgentPreview => ({
-  compile: async () => ({ ok: true, js: '', css: '', warnings: [] }),
+  compile: async () => ({
+    ok: true,
+    build,
+    warnings: [],
+  }),
   refresh: async () => ({ refreshed: true, buildId: 1 }),
   readErrors: () => ({ buildId: 1, status: 'ready', errors: [], dropped: 0 }),
   readConsole: () => ({ buildId: 1, entries: [], dropped: 0 }),
   ...changes,
 })
-const createAgent = (modelConfig = config) =>
-  createConversationAgent(
+const repositoryFor = (project: ReturnType<typeof createProjectStore>) =>
+  createProjectRepository(
+    'test-project',
+    project,
+    { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
+    [],
+  )
+const createAgent = (modelConfig = config) => {
+  const project = createProjectStore(demoProject)
+  return createConversationAgent(
     modelConfig,
     'test-project',
-    createProjectStore(demoProject),
+    project,
+    repositoryFor(project),
     createPreview(),
   )
+}
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
   `data: ${JSON.stringify({ id: 'completion', choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`
 const reply = () =>
@@ -34,6 +64,32 @@ const reply = () =>
 afterEach(() => vi.restoreAllMocks())
 
 describe('browser Pi runtime', () => {
+  it('exposes the stable image-analysis contract without pretending analysis is available', async () => {
+    const project = createProjectStore(demoProject)
+    const repository = createProjectRepository(
+      'test-project',
+      project,
+      { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
+      [
+        {
+          id: 'reference',
+          projectId: 'test-project',
+          path: 'attachments/reference.png',
+          mediaType: 'image/png',
+          size: 5,
+          createdAt: 1,
+          updatedAt: 1,
+          revision: 1,
+        },
+      ],
+    )
+    const tool = createAnalyzeImageTool(repository)
+
+    await expect(
+      tool.execute('analyze', { path: 'attachments/reference.png', question: 'What is shown?' }),
+    ).rejects.toThrow('not available yet')
+  })
+
   it.each([
     [500, 'service'],
     [503, 'service'],
@@ -42,10 +98,21 @@ describe('browser Pi runtime', () => {
     [422, 'compile'],
   ] as const)('classifies HTTP %i from the compilation client as %s', async (status, phase) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      Response.json({ ok: false, errors: [{ message: 'Request failed' }] }, { status }),
+      Response.json(
+        {
+          ok: false,
+          reason: status === 400 || status === 413 ? 'invalid-input' : 'compile',
+          errors: [{ message: 'Request failed' }],
+        },
+        { status },
+      ),
     )
     const tool = createCompileTool(signal =>
-      compileFiles(demoProject, signal ?? new AbortController().signal),
+      compileFiles(
+        'test-project',
+        compileInput(demoProject),
+        signal ?? new AbortController().signal,
+      ),
     )
     await expect(tool.execute('compile-error', {})).rejects.toThrow(`"phase":"${phase}"`)
   })
@@ -73,15 +140,16 @@ describe('browser Pi runtime', () => {
         { headers: { 'Content-Type': 'text/event-stream' } },
       )
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      if (String(input) === '/api/compile') {
+      if (String(input) === '/api/compiler/projects/test-project/builds') {
         compilations += 1
-        expect(JSON.parse(String(init?.body)).files['src/main.tsx']).toBe(
+        expect(JSON.parse(String(init?.body)).changes['src/main.tsx']).toBe(
           compilations === 1 ? 'export const value =' : 'export const value = 2',
         )
         return compilations === 1
           ? Response.json(
               {
                 ok: false,
+                reason: 'compile',
                 errors: [
                   { message: 'Unexpected end of file', path: 'src/main.tsx', line: 1, column: 21 },
                 ],
@@ -90,8 +158,7 @@ describe('browser Pi runtime', () => {
             )
           : Response.json({
               ok: true,
-              js: 'BUNDLE_MUST_STAY_IN_PREVIEW',
-              css: 'CSS_MUST_STAY_IN_PREVIEW',
+              build: { ...build, previewUrl: '/__preview/BUNDLE_MUST_STAY_IN_PREVIEW' },
               warnings: [],
             })
       }
@@ -126,9 +193,14 @@ describe('browser Pi runtime', () => {
       config,
       'test-project',
       project,
+      repositoryFor(project),
       createPreview({
         compile: signal =>
-          compileFiles(project.getSnapshot(), signal ?? new AbortController().signal),
+          compileFiles(
+            'test-project',
+            compileInput(project.getSnapshot()),
+            signal ?? new AbortController().signal,
+          ),
         refresh,
       }),
     )
@@ -188,10 +260,12 @@ describe('browser Pi runtime', () => {
           'Indexes require distinct string or numeric fields with identifier names, not paths.',
         ),
       )
+    const project = createProjectStore(demoProject)
     const agent = createConversationAgent(
       config,
       'test-project',
-      createProjectStore(demoProject),
+      project,
+      repositoryFor(project),
       createPreview({ refresh }),
     )
     await agent.prompt('Refresh the preview.')
@@ -217,6 +291,7 @@ describe('browser Pi runtime', () => {
     await expect(unavailable.execute('offline', {})).rejects.toThrow('"phase":"service"')
     const tool = createCompileTool(async () => ({
       ok: false,
+      reason: 'compile',
       errors: [{ message: '界'.repeat(30_000) }],
     }))
     try {
@@ -268,8 +343,10 @@ describe('browser Pi runtime', () => {
     expect(agent.state.tools.map(tool => tool.name)).toEqual([
       'list',
       'read',
+      'copy',
       'edit',
       'write',
+      'analyze_image',
       'db_get',
       'db_list',
       'db_create',
@@ -347,12 +424,16 @@ describe('browser Pi runtime', () => {
 
   it('rejects unsupported configured models rather than silently replacing them', () => {
     expect(() =>
-      createConversationAgent(
-        { ...config, modelId: 'unknown' },
-        'test-project',
-        createProjectStore(demoProject),
-        createPreview(),
-      ),
+      (() => {
+        const project = createProjectStore(demoProject)
+        return createConversationAgent(
+          { ...config, modelId: 'unknown' },
+          'test-project',
+          project,
+          repositoryFor(project),
+          createPreview(),
+        )
+      })(),
     ).toThrow('Unsupported GLM')
   })
 })

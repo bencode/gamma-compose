@@ -1,101 +1,81 @@
-import type { Agent, AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core'
+import type { Agent, AgentEvent } from '@earendil-works/pi-agent-core'
 import { useEffect, useRef, useState } from 'react'
 import {
   type AgentPreview,
   createConversationAgent,
   loadAgentConfig,
 } from '../../core/agent/runtime'
+import type { ProjectRepository } from '../../core/project/repository'
 import type { ProjectStore } from '../../core/project/store'
+import {
+  type ConversationItem,
+  createConversationItems,
+  createUserPrompt,
+  type ToolExecutionState,
+  toolOutputText,
+} from './conversation-transcript'
+import type { MessageAttachments } from './use-message-attachments'
 
-type ToolStatus = 'Pending' | 'Running' | 'Completed' | 'Failed' | 'Stopped'
-type ToolActivity = { id: string; name: string; path?: string; status: ToolStatus }
+export type ConversationPhase =
+  | 'initializing'
+  | 'ready'
+  | 'unavailable'
+  | 'error'
+  | 'running'
+  | 'stopping'
 
-export type ConversationMessage = {
-  id: number
-  role: 'user' | 'assistant'
-  text: string
-  notice?: string
-  failed?: boolean
-  tools?: ToolActivity[]
-}
-
-type ConversationPhase = 'initializing' | 'ready' | 'unavailable' | 'error' | 'running' | 'stopping'
-
-const messageSnapshot = (message: AgentMessage, id: number): ConversationMessage[] => {
-  if (message.role !== 'user' && message.role !== 'assistant') return []
-  const text =
-    typeof message.content === 'string'
-      ? message.content
-      : message.content.flatMap(block => (block.type === 'text' ? [block.text] : [])).join('')
-  if (message.role === 'user') return [{ id, role: 'user', text }]
-  const notice =
-    message.stopReason === 'aborted'
-      ? 'Generation stopped.'
-      : message.stopReason === 'error'
-        ? message.errorMessage || 'Generation failed. Please send a new message to try again.'
-        : message.stopReason === 'length'
-          ? 'The response reached its output limit.'
-          : undefined
-  return [{ id, role: 'assistant', text, notice, failed: message.stopReason === 'error' }]
-}
-
-const conversationSnapshot = (agent: Agent, statuses: Map<string, ToolStatus>) => {
+const conversationSnapshot = (
+  agent: Agent,
+  executions: ReadonlyMap<string, ToolExecutionState>,
+): ConversationItem[] => {
   const toolLabels = new Map(agent.state.tools.map(tool => [tool.name, tool.label]))
-  const messages = agent.state.messages.flatMap((message, id) => {
-    const snapshot = messageSnapshot(message, id)
-    if (message.role !== 'assistant') return snapshot
-    const tools = message.content.flatMap(block =>
-      block.type === 'toolCall'
-        ? [
-            {
-              id: block.id,
-              name: toolLabels.get(block.name) ?? block.name,
-              path:
-                typeof block.arguments === 'object' &&
-                block.arguments !== null &&
-                !Array.isArray(block.arguments) &&
-                typeof block.arguments.path === 'string'
-                  ? block.arguments.path
-                  : undefined,
-              status: statuses.get(block.id) ?? (agent.state.isStreaming ? 'Pending' : 'Stopped'),
-            } satisfies ToolActivity,
-          ]
-        : [],
-    )
-    return snapshot.map(item => ({ ...item, tools }))
+  return createConversationItems({
+    messages: agent.state.messages,
+    streamingMessage: agent.state.streamingMessage,
+    toolLabels,
+    executions,
+    running: agent.state.isStreaming,
   })
-  const streaming = agent.state.streamingMessage
-  return streaming
-    ? [...messages, ...messageSnapshot(streaming, agent.state.messages.length)]
-    : messages
 }
 
 const updateToolStatus = (
   event: AgentEvent,
-  statuses: Map<string, ToolStatus>,
+  executions: Map<string, ToolExecutionState>,
   signal: AbortSignal,
 ) => {
-  if (event.type === 'tool_execution_start' || event.type === 'tool_execution_update')
-    statuses.set(event.toolCallId, 'Running')
-  if (event.type === 'tool_execution_end')
-    statuses.set(
+  if (event.type === 'tool_execution_start') executions.set(event.toolCallId, { status: 'Running' })
+  if (event.type === 'tool_execution_update') {
+    const output = toolOutputText(event.partialResult)
+    const previousOutput = executions.get(event.toolCallId)?.output
+    const nextOutput = output ?? previousOutput
+    executions.set(
       event.toolCallId,
-      signal.aborted ? 'Stopped' : event.isError ? 'Failed' : 'Completed',
+      nextOutput === undefined ? { status: 'Running' } : { status: 'Running', output: nextOutput },
     )
+  }
+  if (event.type === 'tool_execution_end') {
+    const output = toolOutputText(event.result)
+    executions.set(event.toolCallId, {
+      status: signal.aborted ? 'Stopped' : event.isError ? 'Failed' : 'Completed',
+      ...(output === undefined ? {} : { output }),
+    })
+  }
 }
 
 export const useConversation = (
   projectId: string,
   project: ProjectStore,
+  repository: ProjectRepository,
+  attachments: MessageAttachments,
   { compile, refresh, readErrors, readConsole }: AgentPreview,
 ) => {
   const [draft, setDraft] = useState('')
-  const [messages, setMessages] = useState<ConversationMessage[]>([])
+  const [messages, setMessages] = useState<ConversationItem[]>([])
   const [phase, setPhase] = useState<ConversationPhase>('initializing')
   const [error, setError] = useState<string>()
   const agentRef = useRef<Agent>(undefined)
   const busyRef = useRef(false)
-  const toolStatuses = useRef(new Map<string, ToolStatus>())
+  const toolExecutions = useRef(new Map<string, ToolExecutionState>())
 
   useEffect(() => {
     const controller = new AbortController()
@@ -108,17 +88,17 @@ export const useConversation = (
           setPhase('unavailable')
           return
         }
-        const agent = createConversationAgent(config, projectId, project, {
+        const agent = createConversationAgent(config, projectId, project, repository, {
           compile,
           refresh,
           readErrors,
           readConsole,
         })
         agentRef.current = agent
-        toolStatuses.current.clear()
+        toolExecutions.current.clear()
         unsubscribe = agent.subscribe((event, signal) => {
-          updateToolStatus(event, toolStatuses.current, signal)
-          setMessages(conversationSnapshot(agent, toolStatuses.current))
+          updateToolStatus(event, toolExecutions.current, signal)
+          setMessages(conversationSnapshot(agent, toolExecutions.current))
         })
         setPhase('ready')
       } catch (cause) {
@@ -134,18 +114,20 @@ export const useConversation = (
       agentRef.current?.abort()
       agentRef.current = undefined
     }
-  }, [projectId, project, compile, refresh, readErrors, readConsole])
+  }, [projectId, project, repository, compile, refresh, readErrors, readConsole])
 
   const send = async () => {
     const agent = agentRef.current
     const text = draft.trim()
-    if (!agent || busyRef.current || !text) return
+    const attachedPaths = attachments.selectedPaths
+    if (!agent || busyRef.current || (!text && !attachedPaths.length)) return
     busyRef.current = true
     setPhase('running')
     setError(undefined)
     setDraft('')
+    attachments.clearSelection()
     try {
-      await agent.prompt(text)
+      await agent.prompt(createUserPrompt(text, attachedPaths))
     } catch (cause) {
       if (agentRef.current === agent) {
         setError(cause instanceof Error ? cause.message : 'Could not send the message.')
@@ -154,11 +136,12 @@ export const useConversation = (
       if (agentRef.current === agent) {
         busyRef.current = false
         setPhase('ready')
-        toolStatuses.current.forEach((status, id) => {
-          if (status === 'Running') toolStatuses.current.set(id, 'Stopped')
+        toolExecutions.current.forEach((execution, id) => {
+          if (execution.status === 'Running')
+            toolExecutions.current.set(id, { ...execution, status: 'Stopped' })
         })
         try {
-          setMessages(conversationSnapshot(agent, toolStatuses.current))
+          setMessages(conversationSnapshot(agent, toolExecutions.current))
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : 'Could not update the conversation.')
         }

@@ -10,7 +10,7 @@ The harness runs on the client: it owns the Agent loop, conversation context, pr
 
 - **Client:** Agent orchestration, workspace management, local file processing, tool execution, and project-scoped IndexedDB access.
 - **Model gateway:** request forwarding, browser cross-origin access, usage accounting, and billing.
-- **Compiler:** stateless compilation of submitted source files.
+- **Compiler:** source-stateless compilation into disposable static artifacts.
 - **Model provider:** model inference.
 
 The server does not own the harness session or workspace. Statelessness applies to Agent execution and compilation; accounting and billing may retain their necessary records.
@@ -25,7 +25,9 @@ This is data minimization, not a promise that no data leaves the device:
 
 - Original documents can remain local.
 - Selected content is sent to the model provider and is visible to our gateway when proxied.
-- React compilation currently sends project source files to our compiler.
+- React compilation sends a complete hash manifest and the source files required for
+  an incremental build. Source-path changes also send every non-CSS module so imports
+  can be resolved again.
 - Provider trust depends on the chosen service and its data policies.
 
 ## Near-Term Focus
@@ -36,6 +38,9 @@ Generated applications can use `@gamma-compose/local-db` through an iframe-to-ho
 MessagePort bridge. The sandbox keeps its opaque origin; the host owns schema
 validation and IndexedDB. Agent database tools use the same project-scoped data.
 Compilation remains stateless and does not receive database records.
+The browser is the source authority. The compiler keeps only immutable, rebuildable
+output trees keyed by project and build hashes; it does not keep project source or an
+Agent session. Deleting compiler storage causes a full rebuild from browser IndexedDB.
 
 The preview reports bounded, current-build runtime diagnostics back to the host.
 The Agent can explicitly read errors and console output when the user reports broken

@@ -5,14 +5,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openProjectDatabase } from '../core/project/database'
 import { App } from './app'
 
+const compiled = {
+  ok: true,
+  build: {
+    projectId: 'test-project',
+    buildId: 'a'.repeat(64),
+    compilerVersion: '1',
+    entry: 'src/main.tsx',
+    files: {},
+    previewUrl: '/__preview/test-project/1',
+  },
+  warnings: [],
+}
+const missingTree = () =>
+  Response.json({ ok: false, reason: 'not-found', error: { message: 'Missing' } }, { status: 404 })
+
 beforeEach(() => {
   vi.stubGlobal('indexedDB', new IDBFactory())
   window.history.replaceState(null, '', '/')
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async input =>
-    String(input) === '/api/agent/config'
-      ? Response.json({ enabled: false })
-      : Response.json({ ok: true, js: 'export {}', css: '', warnings: [] }),
-  )
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const url = String(input)
+    if (url === '/api/agent/config') return Response.json({ enabled: false })
+    if (url.endsWith('/tree')) return missingTree()
+    return Response.json(compiled)
+  })
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -21,8 +37,8 @@ const configureWriter = (contents: string[]) => {
   vi.mocked(fetch).mockImplementation(async input => {
     if (String(input) === '/api/agent/config')
       return Response.json({ enabled: true, provider: 'zai-coding-cn', modelId: 'glm-5.3' })
-    if (String(input) === '/api/compile')
-      return Response.json({ ok: true, js: 'export {}', css: '', warnings: [] })
+    if (String(input).endsWith('/tree')) return missingTree()
+    if (String(input).endsWith('/builds')) return Response.json(compiled)
     const content = contents[request++]
     const delta =
       content === undefined
@@ -70,16 +86,24 @@ describe('gallery and project navigation', () => {
     const projectPath = window.location.pathname
     expect(projectPath).toMatch(/^\/projects\/.+/)
     await sendChange()
-    await waitFor(() => expect(screen.getByText('Saved', { exact: true })).toBeInTheDocument())
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
-    expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).toHaveValue(updated)
+    const projectId = projectPath.split('/').at(-1) as string
+    await waitFor(async () => {
+      const database = await openProjectDatabase()
+      try {
+        expect((await database.getProject(projectId))?.files['src/app.tsx']).toBe(updated)
+      } finally {
+        database.close()
+      }
+    })
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
+    expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     first.unmount()
 
     render(<App />)
     await screen.findByTitle('Project preview')
     expect(screen.getByRole('region', { name: 'Conversation' })).toBeEmptyDOMElement()
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
-    expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).toHaveValue(updated)
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
+    expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     await user.click(screen.getByRole('link', { name: 'Back to gallery' }))
     const projects = await screen.findByRole('region', { name: 'My projects' })
     await waitFor(() => expect(within(projects).getAllByRole('link')).toHaveLength(1))
@@ -90,7 +114,7 @@ describe('gallery and project navigation', () => {
     await user.click(await screen.findByRole('button', { name: 'Start with Blank' }))
     await screen.findByTitle('Project preview')
     expect(window.location.pathname).not.toBe(projectPath)
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
     expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).not.toHaveValue(updated)
   })
 
@@ -99,7 +123,7 @@ describe('gallery and project navigation', () => {
     const project = await database.createProject('blank')
     const snapshot = { entry: project.entry, files: { [project.entry]: '' } }
     const overhead = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength
-    snapshot.files[project.entry] = `//${'x'.repeat(2 * 1024 * 1024 - overhead - 2)}`
+    snapshot.files[project.entry] = `//${'x'.repeat(16 * 1024 * 1024 - overhead - 2)}`
     try {
       await database.saveProject({ ...project, ...snapshot })
     } finally {
@@ -108,8 +132,14 @@ describe('gallery and project navigation', () => {
     window.history.replaceState(null, '', `/projects/${project.id}`)
     render(<App />)
     expect(await screen.findByTitle('Project preview')).toBeInTheDocument()
-    const compileRequest = vi.mocked(fetch).mock.calls.find(([url]) => url === '/api/compile')
-    expect(JSON.parse(String(compileRequest?.[1]?.body))).toEqual(snapshot)
+    const compileRequest = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => String(url).endsWith('/builds'))
+    expect(JSON.parse(String(compileRequest?.[1]?.body))).toMatchObject({
+      baseBuildId: null,
+      entry: snapshot.entry,
+      changes: snapshot.files,
+    })
   })
 
   it('shows save failure and retries the latest in-memory files', async () => {
@@ -125,12 +155,15 @@ describe('gallery and project navigation', () => {
       throw new DOMException('Storage full', 'QuotaExceededError')
     })
     await sendChange()
-    expect(await screen.findByText('Save failed')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Save failed. Retry save' }),
+    ).toBeInTheDocument()
     expect((await database.getProject(project.id))?.files).toEqual(project.files)
     expect(warning).toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: 'Retry save' }))
-    await screen.findByText('Saved', { exact: true })
-    expect((await database.getProject(project.id))?.files['src/app.tsx']).toContain('Retry me')
+    await user.click(screen.getByRole('button', { name: 'Save failed. Retry save' }))
+    await waitFor(async () =>
+      expect((await database.getProject(project.id))?.files['src/app.tsx']).toContain('Retry me'),
+    )
     database.close()
   })
 

@@ -2,7 +2,9 @@ import { LocalDbError, openLocalDb } from '@gamma-compose/local-db'
 import { createLocalDbBridgeHost } from '@gamma-compose/local-db/bridge'
 import type { CompileDiagnostic, CompileResult } from '@gamma-compose/server/compile-contract'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { compileFiles } from '../../core/compile/client'
+import { createCompileCoordinator } from '../../core/compile/coordinator'
+import type { ProjectCompileState } from '../../core/project/records'
+import type { ProjectRepository } from '../../core/project/repository'
 import type { ProjectSnapshot, ProjectStore } from '../../core/project/store'
 import { createPreviewDiagnostics, type PreviewDiagnostics } from './preview-diagnostics'
 import type { PreviewMessage } from './preview-document'
@@ -24,6 +26,7 @@ export type PreviewState =
 
 type CompiledArtifact = {
   snapshot: ProjectSnapshot
+  repositoryFiles: ReturnType<ProjectRepository['getFiles']>
   result: Extract<CompileResult, { ok: true }>
 }
 
@@ -42,9 +45,20 @@ const rejectWaiter = (pending: RefreshWaiter | undefined, cause: Error) => {
   pending.reject(cause)
 }
 
-export const usePreview = (projectId: string, project: ProjectStore) => {
+export const usePreview = (
+  projectId: string,
+  project: ProjectStore,
+  repository: ProjectRepository,
+  compilePersistence: {
+    load: () => Promise<ProjectCompileState | undefined>
+    save: (state: ProjectCompileState) => Promise<void>
+  },
+) => {
   const activeRequest = useRef<AbortController | null>(null)
   const artifact = useRef<CompiledArtifact | undefined>(undefined)
+  const coordinator = useRef<ReturnType<typeof createCompileCoordinator>>(undefined)
+  coordinator.current ??= createCompileCoordinator(projectId, compilePersistence, repository)
+  const compileCoordinator = coordinator.current
   const waiter = useRef<RefreshWaiter | undefined>(undefined)
   const buildId = useRef(0)
   const diagnosticsRef = useRef<PreviewDiagnostics | undefined>(undefined)
@@ -65,6 +79,7 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
         ? AbortSignal.any([signal, controller.signal])
         : controller.signal
       const snapshot = project.getSnapshot()
+      const repositoryFiles = repository.getFiles()
       artifact.current = undefined
       setState(current => ({
         status: 'compiling',
@@ -81,12 +96,12 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       try {
-        const result = await compileFiles(snapshot, requestSignal)
+        const result = await compileCoordinator.compile(snapshot, requestSignal)
         requestSignal.throwIfAborted()
         if (activeRequest.current !== controller)
           throw new DOMException('Compilation superseded.', 'AbortError')
         if (result.ok) {
-          artifact.current = { snapshot, result }
+          artifact.current = { snapshot, repositoryFiles, result }
           setState(current => ({
             status: 'compiled',
             ...(current.frame ? { frame: current.frame } : {}),
@@ -119,7 +134,7 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
         if (activeRequest.current === controller) activeRequest.current = null
       }
     },
-    [project],
+    [compileCoordinator, project, repository],
   )
 
   const refresh = useCallback(
@@ -128,7 +143,11 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
       if (activeRequest.current)
         return Promise.reject(new Error('Wait for compilation to finish before refreshing.'))
       const current = artifact.current
-      if (!current || current.snapshot !== project.getSnapshot())
+      if (
+        !current ||
+        current.snapshot !== project.getSnapshot() ||
+        current.repositoryFiles !== repository.getFiles()
+      )
         return Promise.reject(
           new Error('Compile the current project successfully before refreshing.'),
         )
@@ -217,7 +236,7 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
         if (signal?.aborted) onAbort()
       })
     },
-    [diagnostics, project],
+    [diagnostics, project, repository],
   )
 
   const onMessage = useCallback(
@@ -296,6 +315,60 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
     [projectId],
   )
 
+  const openAssetBridge = useCallback(
+    (port: MessagePort) => {
+      let closed = false
+      port.addEventListener('message', event => {
+        const value: unknown = event.data
+        if (
+          typeof value !== 'object' ||
+          value === null ||
+          !('type' in value) ||
+          value.type !== 'asset:read' ||
+          !('id' in value) ||
+          !Number.isSafeInteger(value.id) ||
+          !('path' in value) ||
+          typeof value.path !== 'string' ||
+          !('hash' in value) ||
+          typeof value.hash !== 'string'
+        ) {
+          console.error('The preview sent an invalid local asset request.', value)
+          return
+        }
+        const { id, path, hash } = value
+        void Promise.resolve()
+          .then(async () => {
+            const current = artifact.current
+            if (!current || current.repositoryFiles !== repository.getFiles())
+              throw new Error('Compile the current project before loading local images.')
+            const file = current.result.build.files[path]
+            if (file?.kind !== 'asset' || file.sourceHash !== hash)
+              throw new Error(`The compiled build does not contain this local image: ${path}`)
+            return repository.readBlob(path)
+          })
+          .then(blob => {
+            if (!closed) port.postMessage({ type: 'asset:result', id, blob })
+          })
+          .catch(error => {
+            console.error('Could not load a local preview image.', error)
+            if (!closed)
+              port.postMessage({
+                type: 'asset:result',
+                id,
+                error:
+                  error instanceof Error ? error.message : 'The local image could not be loaded.',
+              })
+          })
+      })
+      port.start()
+      return () => {
+        closed = true
+        port.close()
+      }
+    },
+    [repository],
+  )
+
   const readErrors = useCallback(() => diagnostics.readErrors(), [diagnostics])
   const readConsole = useCallback(() => diagnostics.readConsole(), [diagnostics])
 
@@ -306,6 +379,7 @@ export const usePreview = (projectId: string, project: ProjectStore) => {
     retry,
     onMessage,
     openDatabaseBridge,
+    openAssetBridge,
     readErrors,
     readConsole,
   }

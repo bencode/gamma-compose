@@ -14,7 +14,8 @@ The store survives tab changes and responsive panel remounts. On refresh, a new
 store is created from the last saved snapshot, with a new conversation and preview.
 
 `core/project/database.ts` owns the native IndexedDB `gamma-compose` database,
-version 1. The `templates` and `projects` stores use `id` as their key. Three
+version 3. The `templates`, `projects`, `compileStates`, `files`, and `contents`
+stores keep projects, compiled-tree metadata, and local repository files. Three
 templates are inserted during initial database creation, never on normal reopening.
 Creating a project copies the selected template's files into an independent UUID
 record with a name and `updatedAt`. Opening an existing project never copies a template.
@@ -29,7 +30,7 @@ Read failures and missing project IDs do not silently create replacement project
 Closing the workbench stops the Agent and compilation; chat and drafts are not saved.
 
 Before publishing, the store validates canonical relative paths, file/directory
-collisions, the 128-file limit and the 2 MiB serialized UTF-8 compile request limit.
+collisions, the 1,024-file limit and the 16 MiB serialized UTF-8 project limit.
 Rejected writes keep the previous snapshot. An edit containing several replacements
 publishes once after Pi has validated all replacements. Stop does not undo writes.
 
@@ -39,8 +40,10 @@ publishes once after Pi has validated all replacements. Stop does not undo write
 | --- | --- | --- |
 | `list` | `{ path?: string }` | Sorted project-relative file paths, one per line |
 | `read` | `{ path: string, offset?: number, limit?: number }` | Text, with Pi's range and truncation guidance |
+| `copy` | `{ source: string, destination: string, overwrite?: boolean }` | Copy one file while preserving its source |
 | `edit` | `{ path: string, edits: { oldText: string, newText: string }[] }` | Pi's replacement confirmation |
 | `write` | `{ path: string, content: string }` | Pi's create/overwrite confirmation |
+| `analyze_image` | `{ path: string, question?: string }` | Stable image-analysis contract; analysis is not implemented yet |
 | `db_get` | `{ resource: string, id: string }` | One record or `null` |
 | `db_list` | `{ resource: string, query?: ListQuery }` | A page of records |
 | `db_create` | `{ resource: string, data: object }` | The committed record or a bounded commit summary |
@@ -54,6 +57,12 @@ publishes once after Pi has validated all replacements. Stop does not undo write
 `list` recursively lists every file by default, without reading content. `path`
 restricts it to a directory. Its output is a flat list, not an ASCII tree; the file
 panel independently renders a tree. Missing directories and file arguments fail.
+
+Uploaded Markdown and images live under `attachments/`. `copy` promotes a selected
+image to `src/assets/` without removing the reference attachment. Image copies have
+independent file metadata but share one IndexedDB Blob through `contentId`; legacy
+metadata falls back to `id`. `overwrite` defaults to false and must be explicit.
+Blob content is deleted only after its final metadata reference is removed.
 
 `read`, `edit` and `write` reuse factories from the pinned Pi core 0.84.4 package.
 The binding retains their schemas, argument preparation, truncation and replacement
@@ -87,25 +96,28 @@ guidance to narrow the query; an oversized successful create or update returns a
 small `{ committed: true, id, recordOmitted }` result so the committed write is not
 misreported as a failure.
 
-The UI shows tool names, target paths and execution status. It does not render
-file contents, write arguments or edit diffs in the conversation. File contents
-returned by tools are visible to the model provider through the existing proxy.
-Tool arguments are untrusted model output. The conversation reads path labels only
-from non-null, non-array objects and leaves the original arguments unchanged for
-Pi validation. Invalid arguments produce tool errors without blocking later calls
-or messages. End-of-run cleanup restores sending before refreshing the snapshot;
-snapshot failures are reported visibly rather than silently discarded.
+The UI groups Pi thinking and tool calls into disclosures. A live trailing group
+shows its step rows and folds after completion. Expanding a tool step reveals its
+input and text output as bounded preformatted text, not Markdown. File contents
+returned by tools are also visible to the model provider through the existing
+proxy. Tool arguments are untrusted model output. The conversation reads path
+labels only from non-null, non-array objects and leaves the original arguments
+unchanged for Pi validation. Invalid arguments produce tool errors without
+blocking later calls or messages. End-of-run cleanup restores sending before
+refreshing the snapshot; snapshot failures are reported visibly rather than
+silently discarded.
 
 ## Compilation flow
 
 ```text
 User request -> Pi file tools -> current project snapshot
                                -> explicit compile tool
-                                  -> POST /api/compile
+                                  -> POST /api/compiler/projects/:projectId/builds
+                                     with a complete hash tree and required source text
                                      -> failure: Pi tool error -> model repair
-                                     -> success: cache artifact
+                                     -> success: publish immutable static revision
                                         -> explicit refresh_preview
-                                           -> new iframe reports preview:loaded
+                                           -> iframe loads previewUrl and reports preview:loaded
 
 User request -> Pi database tools -> host-owned project IndexedDB
                                   -> explicit refresh_preview using current artifact
@@ -120,8 +132,8 @@ duplicate source files in every model request. The model discovers files with to
 
 `usePreview` automatically compiles and refreshes the loaded project. Later file
 changes do not trigger either action. Its stable `compile(signal?)` command reads
-the latest store snapshot and caches the successful artifact without replacing the
-iframe. `refresh(signal?)` requires that artifact to match the current snapshot,
+the latest store and repository snapshots and caches the successful artifact without
+replacing the iframe. `refresh(signal?)` requires that artifact to match both snapshots,
 creates a new iframe key, and resolves only after the source-checked
 `preview:loaded` message followed by a one-second initialization stability window.
 A load or runtime error during that window rejects the refresh and returns to Pi as
@@ -139,7 +151,7 @@ service failures as broken source. Diagnostic text is capped at 50 KiB with an e
 truncation notice. The preview retains the complete compiler diagnostics.
 
 Compile success returns only `compiled: true`, `refreshRequired: true`, and
-`warnings`. JavaScript and CSS remain in preview state, never in tool content or
+`warnings`. The build URL remains in preview state and never enters tool content or
 details. `refresh_preview` returns `{ refreshed: true, buildId }` after module load.
 It may also be called after database-only changes because no source compilation is
 needed. A successful result also means no reported error occurred during the
@@ -179,13 +191,42 @@ There is no automatic repair turn or budget in this iteration; the user initiate
 the diagnostic loop through a normal conversation message and can Stop the Agent.
 
 The compiler additionally allows `react-router-dom` and `@gamma-compose/local-db`
-from its installed dependencies. The local database import resolves to a small
-sandbox client; IndexedDB and Ajv are not bundled into or executed by the opaque-origin
+from its installed dependencies. The local database import maps to a small sandbox
+client in the shared runtime; IndexedDB and Ajv are not executed by the opaque-origin
 iframe. Instead, a transferred `MessagePort` carries typed CRUD requests to a
 host-owned bridge. The iframe retains `sandbox="allow-scripts"` and the existing CSP.
-Preview routes use MemoryRouter, independently of the host BrowserRouter. The bundle
-still contains a single entry and its dependencies. Gallery thumbnails are static screenshots of the templates,
-not live compiler requests for every card.
+Preview routes use MemoryRouter, independently of the host BrowserRouter. Gallery
+thumbnails are static screenshots of the templates, not live compiler requests for
+every card.
+
+PNG, JPEG, WebP, and GIF files under `src/assets/` are compiler inputs by descriptor
+only. A normal source import such as `import heroUrl from './assets/hero.png'` resolves
+to a generated ESM wrapper. That wrapper uses top-level await to request the Blob from
+an independent local-asset `MessagePort`, creates an iframe-owned object URL, and
+default-exports the URL string. The host accepts only paths and hashes declared by the
+current successful build. Repeated imports reuse the module result, lazy modules load
+their images on demand, and iframe teardown revokes created URLs. Image bytes travel
+from host IndexedDB to the opaque-origin iframe and never enter the compilation request
+or server storage. CSS `url(...)`, SVG, and arbitrary binary assets remain unsupported.
+
+The browser owns the source tree and stores its last successful compiled tree in the
+project database. The initial compile sends every text source plus descriptors for
+local images. Later builds send the complete path/hash/byte manifest tree and normally
+send text only for changed or new files. Image contents are never sent. When source
+paths are added or deleted, the browser also sends every
+non-CSS module so extensionless imports can be resolved again. Absence from the tree
+represents deletion. A 409 causes one harness-owned tree read, diff, and retry. The
+Agent never manages hashes or synchronization.
+
+The server keeps no source session. It publishes rebuildable immutable output under
+`GAMMA_DATA_DIR` (default `.gamma-data`): an HTML entry, one ESM output for every
+declared module or local-image wrapper, independent CSS artifacts, and final Tailwind CSS. Unchanged artifacts
+are hard-linked from the current build. Local import specifiers remain intact and the
+static route resolves extensionless, exact-extension, JSON, and index imports to one
+canonical output URL. React, React DOM, React Router, built-in UI, and the preview
+database client share a precompiled import-map runtime. Literal `React.lazy` imports
+remain dynamic; computed import paths are rejected. Static responses include the CORS
+and cross-origin resource headers required by the iframe's opaque origin.
 
 ## Verification
 

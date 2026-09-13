@@ -9,7 +9,7 @@ import {
   FileError,
 } from '@earendil-works/pi-agent-core'
 import { type TSchema, Type } from 'typebox'
-import type { ProjectStore } from '../project/store'
+import type { ProjectRepository } from '../project/repository'
 import { createProjectEnv, projectRelativePath } from './project-env'
 
 const bindTool = <P extends TSchema, D>(
@@ -30,8 +30,8 @@ const bindTool = <P extends TSchema, D>(
 })
 
 export const createFileTools = (
-  project: ProjectStore,
-  env: ExecutionEnv = createProjectEnv(project),
+  repository: ProjectRepository,
+  env: ExecutionEnv = createProjectEnv(repository),
 ) => {
   const context = { env }
   const read = bindTool(createReadTool(), context)
@@ -52,13 +52,40 @@ export const createFileTools = (
     execute: async (_id, { path }, signal) => {
       signal?.throwIfAborted()
       const relative = path === undefined ? '' : projectRelativePath(path)
-      const files = project.getSnapshot().files
-      if (Object.hasOwn(files, relative)) throw new Error(`Not a directory: ${path}`)
-      const paths = Object.keys(files)
+      const files = repository.getFiles()
+      if (files.some(file => file.path === relative)) throw new Error(`Not a directory: ${path}`)
+      const paths = files
+        .map(file => file.path)
         .filter(key => !relative || key.startsWith(`${relative}/`))
         .sort()
       if (relative && !paths.length) throw new Error(`Directory not found: ${path}`)
       return { content: [{ type: 'text', text: paths.join('\n') }], details: undefined }
+    },
+  }
+  const copySchema = Type.Object({
+    source: Type.String({ description: 'Existing project-relative file path.' }),
+    destination: Type.String({ description: 'New project-relative file path.' }),
+    overwrite: Type.Optional(
+      Type.Boolean({ description: 'Replace an existing destination. Defaults to false.' }),
+    ),
+  })
+  const copy: AgentTool<typeof copySchema, undefined> = {
+    name: 'copy',
+    label: 'copy',
+    description:
+      'Copy one project file while preserving the source. Set overwrite to true only when intentionally replacing the destination.',
+    parameters: copySchema,
+    executionMode: 'sequential',
+    execute: async (_id, { source, destination, overwrite }, signal) => {
+      signal?.throwIfAborted()
+      const sourcePath = projectRelativePath(source)
+      const destinationPath = projectRelativePath(destination)
+      await repository.copyFile({ source: sourcePath, destination: destinationPath, overwrite })
+      signal?.throwIfAborted()
+      return {
+        content: [{ type: 'text', text: `Copied ${sourcePath} to ${destinationPath}` }],
+        details: undefined,
+      }
     },
   }
   const browserRead: typeof read = {
@@ -82,6 +109,7 @@ export const createFileTools = (
   return [
     list,
     browserRead,
+    copy,
     bindTool(createEditTool(), context),
     bindTool(createWriteTool(), context),
   ]
