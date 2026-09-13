@@ -7,6 +7,7 @@ type PreviewPanelProps = {
   retry: () => void
   onMessage: (message: PreviewMessage) => void
   openDatabaseBridge: (port: MessagePort) => () => void
+  openAssetBridge: (port: MessagePort) => () => void
   retryDisabled?: boolean
 }
 
@@ -21,10 +22,12 @@ export const PreviewPanel = ({
   retry,
   onMessage,
   openDatabaseBridge,
+  openAssetBridge,
   retryDisabled = false,
 }: PreviewPanelProps) => {
   const frame = useRef<HTMLIFrameElement>(null)
   const closeDatabaseBridge = useRef<() => void>(undefined)
+  const closeAssetBridge = useRef<() => void>(undefined)
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
       if (
@@ -41,6 +44,7 @@ export const PreviewPanel = ({
   useEffect(
     () => () => {
       closeDatabaseBridge.current?.()
+      closeAssetBridge.current?.()
     },
     [],
   )
@@ -48,9 +52,15 @@ export const PreviewPanel = ({
   const renderPreview = () => {
     if (!state.frame) return
     closeDatabaseBridge.current?.()
-    const channel = new MessageChannel()
-    closeDatabaseBridge.current = openDatabaseBridge(channel.port1)
-    frame.current?.contentWindow?.postMessage({ type: 'preview:start' }, '*', [channel.port2])
+    closeAssetBridge.current?.()
+    const databaseChannel = new MessageChannel()
+    const assetChannel = new MessageChannel()
+    closeDatabaseBridge.current = openDatabaseBridge(databaseChannel.port1)
+    closeAssetBridge.current = openAssetBridge(assetChannel.port1)
+    frame.current?.contentWindow?.postMessage({ type: 'preview:start' }, '*', [
+      databaseChannel.port2,
+      assetChannel.port2,
+    ])
   }
 
   return (

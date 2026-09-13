@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectCompileState } from '../../core/project/records'
+import { createProjectRepository } from '../../core/project/repository'
 import { createProjectStore } from '../../core/project/store'
 import { PreviewPanel } from './preview-panel'
 import { usePreview } from './use-preview'
@@ -25,9 +26,17 @@ const persistence = {
   load: async (): Promise<ProjectCompileState | undefined> => undefined,
   save: async (_state: ProjectCompileState) => undefined,
 }
+const repositoryFor = (project: ReturnType<typeof createProjectStore>) =>
+  createProjectRepository(
+    'test-project',
+    project,
+    { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
+    [],
+  )
 const Preview = () => {
   const [project] = useState(() => createProjectStore(input))
-  return <PreviewPanel {...usePreview('test-project', project, persistence)} />
+  const [repository] = useState(() => repositoryFor(project))
+  return <PreviewPanel {...usePreview('test-project', project, repository, persistence)} />
 }
 
 afterEach(() => {
@@ -63,6 +72,7 @@ describe('preview lifecycle', () => {
 
   it('uploads only changed source and keeps the current frame until explicit refresh', async () => {
     const project = createProjectStore(input)
+    const repository = repositoryFor(project)
     const nextResult = {
       ok: true as const,
       build: build('b', '/__preview/projects/test/builds/b/index.html'),
@@ -75,7 +85,7 @@ describe('preview lifecycle', () => {
       .mockResolvedValueOnce(response(nextResult))
     let preview: ReturnType<typeof usePreview> | undefined
     const Connected = () => {
-      preview = usePreview('test-project', project, persistence)
+      preview = usePreview('test-project', project, repository, persistence)
       return <PreviewPanel {...preview} />
     }
     render(<Connected />)
@@ -112,6 +122,7 @@ describe('preview lifecycle', () => {
 
   it('refreshes a stale baseline and retries one time with the same source tree', async () => {
     const project = createProjectStore(input)
+    const repository = repositoryFor(project)
     const latest = build('b')
     const completed = { ok: true as const, build: build('c'), warnings: [] }
     const fetch = vi
@@ -123,7 +134,9 @@ describe('preview lifecycle', () => {
       )
       .mockResolvedValueOnce(response({ ok: true, build: latest }))
       .mockResolvedValueOnce(response(completed))
-    const { result: hook } = renderHook(() => usePreview('test-project', project, persistence))
+    const { result: hook } = renderHook(() =>
+      usePreview('test-project', project, repository, persistence),
+    )
     await waitFor(() => expect(hook.current.state.status).toBe('loading'))
     act(() => project.writeFile('main.ts', 'export const value = 2'))
     await act(async () => hook.current.compile())
@@ -151,5 +164,68 @@ describe('preview lifecycle', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('main.ts:2:3')
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByTitle('Project preview')).toBeInTheDocument()
+  })
+
+  it('serves only assets declared by the compiled build through the local bridge', async () => {
+    const project = createProjectStore({
+      entry: 'main.ts',
+      files: { 'main.ts': "import heroUrl from './src/assets/hero.png'; console.log(heroUrl)" },
+    })
+    const image = new Blob(['local-image'], { type: 'image/png' })
+    const repository = createProjectRepository(
+      'test-project',
+      project,
+      { getStoredFileContent: async () => image, saveStoredFiles: async () => undefined },
+      [
+        {
+          id: 'hero',
+          projectId: 'test-project',
+          path: 'src/assets/hero.png',
+          mediaType: 'image/png',
+          size: image.size,
+          createdAt: 1,
+          updatedAt: 1,
+          revision: 1,
+        },
+      ],
+    )
+    const assetResult = {
+      ok: true as const,
+      build: {
+        ...build('b'),
+        files: {
+          'src/assets/hero.png': {
+            kind: 'asset' as const,
+            sourceHash: 'asset-hash',
+            sourceBytes: image.size,
+            outputHash: 'output-hash',
+            outputPath: 'modules/src/assets/hero.png.js',
+          },
+        },
+      },
+      warnings: [],
+    }
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(notFound())
+      .mockResolvedValueOnce(response(assetResult))
+    const { result: hook } = renderHook(() =>
+      usePreview('test-project', project, repository, persistence),
+    )
+    await waitFor(() => expect(hook.current.state.status).toBe('loading'))
+    const channel = new MessageChannel()
+    const reply = new Promise<unknown>(resolve => {
+      channel.port2.addEventListener('message', event => resolve(event.data))
+      channel.port2.start()
+    })
+    const close = hook.current.openAssetBridge(channel.port1)
+    channel.port2.postMessage({
+      type: 'asset:read',
+      id: 1,
+      path: 'src/assets/hero.png',
+      hash: 'asset-hash',
+    })
+    expect(await reply).toMatchObject({ type: 'asset:result', id: 1, blob: image })
+    close()
+    channel.port2.close()
   })
 })

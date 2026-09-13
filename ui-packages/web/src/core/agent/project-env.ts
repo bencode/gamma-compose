@@ -4,7 +4,9 @@ import {
   FileError,
   type FileInfo,
 } from '@earendil-works/pi-agent-core'
-import { type ProjectStore, validateProjectPath } from '../project/store'
+import { type ProjectRepository, RepositoryError } from '../project/repository'
+import { blobBytes } from '../project/repository-files'
+import { validateProjectPath } from '../project/store'
 
 const root = '/project'
 
@@ -17,10 +19,12 @@ export const projectRelativePath = (path: string) => {
   return relative
 }
 
-const attempt = async <T>(action: () => T, signal?: AbortSignal) => {
+const attempt = async <T>(action: () => T | Promise<T>, signal?: AbortSignal) => {
   try {
     if (signal?.aborted) throw new FileError('aborted', 'Operation aborted.')
-    return { ok: true as const, value: action() }
+    const value = await action()
+    if (signal?.aborted) throw new FileError('aborted', 'Operation aborted.')
+    return { ok: true as const, value }
   } catch (cause) {
     return {
       ok: false as const,
@@ -28,7 +32,9 @@ const attempt = async <T>(action: () => T, signal?: AbortSignal) => {
         cause instanceof FileError
           ? cause
           : new FileError(
-              'unknown',
+              cause instanceof RepositoryError && cause.code !== 'invalid_content'
+                ? cause.code
+                : 'unknown',
               cause instanceof Error ? cause.message : 'Project operation failed.',
               undefined,
               cause instanceof Error ? cause : undefined,
@@ -43,33 +49,32 @@ const unsupported = async () => ({
 })
 
 export const createProjectEnv = (
-  project: ProjectStore,
+  repository: ProjectRepository,
   readonlyFiles: Readonly<Record<string, string>> = {},
 ): ExecutionEnv => {
-  const modified = new Map(
-    [...Object.keys(project.getSnapshot().files), ...Object.keys(readonlyFiles)].map(path => [
-      path,
-      Date.now(),
-    ]),
-  )
-  const files = () => ({ ...project.getSnapshot().files, ...readonlyFiles })
+  const readonlyModified = new Map(Object.keys(readonlyFiles).map(path => [path, Date.now()]))
   const info = (path: string): FileInfo => {
     const relative = projectRelativePath(path)
-    const current = files()
-    const file = Object.hasOwn(current, relative)
-    if (!file && relative && !Object.keys(current).some(key => key.startsWith(`${relative}/`)))
+    const file = repository.getFiles().find(item => item.path === relative)
+    const readonly = Object.hasOwn(readonlyFiles, relative)
+    const paths = [...repository.getFiles().map(item => item.path), ...Object.keys(readonlyFiles)]
+    if (!file && !readonly && relative && !paths.some(key => key.startsWith(`${relative}/`)))
       throw new FileError('not_found', `Path not found: ${path}`, path)
     return {
       name: relative.split('/').at(-1) || 'project',
       path: relative ? `${root}/${relative}` : root,
-      kind: file ? 'file' : 'directory',
-      size: file ? new TextEncoder().encode(current[relative]).byteLength : 0,
-      mtimeMs: modified.get(relative) ?? 0,
+      kind: file || readonly ? 'file' : 'directory',
+      size:
+        file?.size ?? (readonly ? new TextEncoder().encode(readonlyFiles[relative]).byteLength : 0),
+      mtimeMs: file?.updatedAt ?? readonlyModified.get(relative) ?? 0,
     }
   }
-  const read = (path: string) => {
+  const read = async (path: string) => {
     if (info(path).kind !== 'file') throw new FileError('is_directory', `Not a file: ${path}`, path)
-    return files()[projectRelativePath(path)] as string
+    const relative = projectRelativePath(path)
+    return Object.hasOwn(readonlyFiles, relative)
+      ? (readonlyFiles[relative] as string)
+      : repository.readText(relative)
   }
   return {
     cwd: root,
@@ -82,16 +87,23 @@ export const createProjectEnv = (
     exists: (path, signal) =>
       attempt(() => {
         const relative = projectRelativePath(path)
-        const current = files()
+        const paths = [
+          ...repository.getFiles().map(item => item.path),
+          ...Object.keys(readonlyFiles),
+        ]
         return (
-          !relative ||
-          Object.hasOwn(current, relative) ||
-          Object.keys(current).some(key => key.startsWith(`${relative}/`))
+          !relative || paths.includes(relative) || paths.some(key => key.startsWith(`${relative}/`))
         )
       }, signal),
     fileInfo: (path, signal) => attempt(() => info(path), signal),
     readTextFile: (path, signal) => attempt(() => read(path), signal),
-    readBinaryFile: (path, signal) => attempt(() => new TextEncoder().encode(read(path)), signal),
+    readBinaryFile: (path, signal) =>
+      attempt(async () => {
+        const relative = projectRelativePath(path)
+        if (Object.hasOwn(readonlyFiles, relative))
+          return new TextEncoder().encode(readonlyFiles[relative])
+        return new Uint8Array(await blobBytes(await repository.readBlob(relative)))
+      }, signal),
     writeFile: (path, content, signal) =>
       attempt(() => {
         if (typeof content !== 'string')
@@ -99,8 +111,7 @@ export const createProjectEnv = (
         const relative = projectRelativePath(path)
         if (Object.hasOwn(readonlyFiles, relative))
           throw new FileError('permission_denied', `Read-only file: ${path}`, path)
-        project.writeFile(relative, content)
-        modified.set(relative, Date.now())
+        return repository.writeText(relative, content)
       }, signal),
     joinPath: unsupported,
     readTextLines: unsupported,
@@ -119,7 +130,7 @@ export const createProjectEnv = (
       ),
     }),
     cleanup: async () => {
-      modified.clear()
+      readonlyModified.clear()
     },
   }
 }

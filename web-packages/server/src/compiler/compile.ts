@@ -6,9 +6,11 @@ import type {
   CompileDiagnostic,
   CompiledTree,
 } from './contract.js'
+import { isAssetPath } from './input.js'
 import {
   type BuildFileMetadata,
   collectReachableStyles,
+  compileAsset,
   compileModule,
   compileStyle,
   hashText,
@@ -19,7 +21,7 @@ import { projectStylesPlugin } from './resolve.js'
 import { createRuntimeLoader, runtimeVersion } from './runtime.js'
 import { compileStyles, StyleCompileError } from './styles.js'
 
-export const compilerVersion = '4'
+export const compilerVersion = '5'
 
 const diagnostic = ({ text, location }: Message): CompileDiagnostic => ({
   message: text,
@@ -82,7 +84,7 @@ const sameSourcePaths = (
   Object.keys(next).every(path => Object.hasOwn(previous, path))
 
 const validateChanges = (input: CompileBuildInput) => {
-  const errors = Object.entries(input.changes).flatMap(([path, contents]) => {
+  return Object.entries(input.changes).flatMap(([path, contents]) => {
     const expected = input.sourceTree[path]
     const actualHash = hashText(contents)
     const actualBytes = Buffer.byteLength(contents)
@@ -90,7 +92,6 @@ const validateChanges = (input: CompileBuildInput) => {
       ? [{ message: 'Changed file contents do not match sourceTree hash and byte count', path }]
       : []
   })
-  return errors
 }
 
 const validateReferences = (files: Readonly<Record<string, BuildFileMetadata>>) => {
@@ -158,10 +159,14 @@ export const createProjectCompiler = (dataRoot: string) => {
       const changedSourceSet = new Set(changedSourcePaths)
       const compilePaths = sameSourcePaths(previous?.files, input.sourceTree)
         ? changedSourcePaths
-        : Object.keys(input.sourceTree).filter(
-            path => !path.endsWith('.css') || changedSourceSet.has(path),
+        : Object.keys(input.sourceTree).filter(path =>
+            isAssetPath(path)
+              ? changedSourceSet.has(path)
+              : !path.endsWith('.css') || changedSourceSet.has(path),
           )
-      const missing = compilePaths.filter(path => input.changes[path] === undefined)
+      const missing = compilePaths.filter(
+        path => !isAssetPath(path) && input.changes[path] === undefined,
+      )
       if (missing.length > 0)
         return {
           ok: false,
@@ -171,9 +176,11 @@ export const createProjectCompiler = (dataRoot: string) => {
 
       const compiled = await Promise.all(
         compilePaths.map(path =>
-          path.endsWith('.css')
-            ? compileStyle(path, input.changes[path] ?? '', input.sourceTree)
-            : compileModule(path, input.changes[path] ?? '', input.sourceTree),
+          isAssetPath(path)
+            ? compileAsset(path, input.sourceTree)
+            : path.endsWith('.css')
+              ? compileStyle(path, input.changes[path] ?? '', input.sourceTree)
+              : compileModule(path, input.changes[path] ?? '', input.sourceTree),
         ),
       )
       const artifacts = Object.fromEntries(compiled.map(artifact => [artifact.path, artifact]))
@@ -197,7 +204,7 @@ export const createProjectCompiler = (dataRoot: string) => {
               async ([path, file]) =>
                 [
                   path,
-                  artifacts[path]?.contents ??
+                  (artifacts[path]?.contents as string | undefined) ??
                     (await store.readArtifact(projectId, previous?.tree.buildId, file.outputPath)),
                 ] as const,
             ),
@@ -214,7 +221,7 @@ export const createProjectCompiler = (dataRoot: string) => {
               async ([path, file]) =>
                 [
                   path,
-                  artifacts[path]?.contents ??
+                  (artifacts[path]?.contents as string | undefined) ??
                     (await store.readArtifact(projectId, previous?.tree.buildId, file.outputPath)),
                 ] as const,
             ),

@@ -115,6 +115,30 @@ describe('HTTP API', () => {
     expect(canonical.headers.get('content-type')).toContain('javascript')
   }, 20_000)
 
+  it('publishes imported images as local asset bridge modules without receiving image bytes', async () => {
+    const asset = new TextEncoder().encode('image-bytes')
+    const input = compileInput({
+      'main.ts': "import imageUrl from './src/assets/pixel.png'; console.log(imageUrl)",
+    })
+    input.sourceTree['src/assets/pixel.png'] = {
+      hash: createHash('sha256').update(asset).digest('hex'),
+      bytes: asset.byteLength,
+    }
+    const response = await requestCompile('asset-project', input)
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    const file = result.build.files['src/assets/pixel.png']
+    expect(file).toMatchObject({ kind: 'asset' })
+
+    const module = await app.request(
+      result.build.previewUrl.replace('index.html', 'modules/src/assets/pixel.png'),
+    )
+    expect(module.status).toBe(307)
+    expect(module.headers.get('location')).toContain(file.outputPath)
+    const wrapper = await app.request(module.headers.get('location') ?? '')
+    expect(await wrapper.text()).toContain('__GAMMA_COMPOSE_ASSET_URL__')
+  })
+
   it('returns 404 for an absent tree and 409 for a stale build baseline', async () => {
     const tree = await app.request('/api/compiler/projects/unknown-api-project/tree')
     expect(tree.status).toBe(404)

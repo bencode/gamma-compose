@@ -86,17 +86,23 @@ describe('gallery and project navigation', () => {
     const projectPath = window.location.pathname
     expect(projectPath).toMatch(/^\/projects\/.+/)
     await sendChange()
-    await waitFor(() =>
-      expect(screen.getByRole('status', { name: 'Saved in this browser' })).toBeInTheDocument(),
-    )
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
+    const projectId = projectPath.split('/').at(-1) as string
+    await waitFor(async () => {
+      const database = await openProjectDatabase()
+      try {
+        expect((await database.getProject(projectId))?.files['src/app.tsx']).toBe(updated)
+      } finally {
+        database.close()
+      }
+    })
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
     expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     first.unmount()
 
     render(<App />)
     await screen.findByTitle('Project preview')
     expect(screen.getByRole('region', { name: 'Conversation' })).toBeEmptyDOMElement()
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
     expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     await user.click(screen.getByRole('link', { name: 'Back to gallery' }))
     const projects = await screen.findByRole('region', { name: 'My projects' })
@@ -108,7 +114,7 @@ describe('gallery and project navigation', () => {
     await user.click(await screen.findByRole('button', { name: 'Start with Blank' }))
     await screen.findByTitle('Project preview')
     expect(window.location.pathname).not.toBe(projectPath)
-    await user.click(screen.getByRole('tab', { name: 'Files' }))
+    await user.click(screen.getByRole('tab', { name: 'Repository' }))
     expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).not.toHaveValue(updated)
   })
 
@@ -155,8 +161,9 @@ describe('gallery and project navigation', () => {
     expect((await database.getProject(project.id))?.files).toEqual(project.files)
     expect(warning).toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Save failed. Retry save' }))
-    await screen.findByRole('status', { name: 'Saved in this browser' })
-    expect((await database.getProject(project.id))?.files['src/app.tsx']).toContain('Retry me')
+    await waitFor(async () =>
+      expect((await database.getProject(project.id))?.files['src/app.tsx']).toContain('Retry me'),
+    )
     database.close()
   })
 

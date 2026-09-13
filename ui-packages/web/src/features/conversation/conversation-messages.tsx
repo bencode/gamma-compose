@@ -1,16 +1,86 @@
-import { useEffect, useRef } from 'react'
-import type { ConversationMessage } from './use-conversation'
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
+import type { ProjectRepository } from '../../core/project/repository'
+import type { RepositoryFile } from '../../core/project/repository-files'
+import { ActivityBlock, ActivityStep } from './conversation-activity'
+import {
+  type ConversationItem,
+  type ConversationStreamItem,
+  groupConversationActivity,
+} from './conversation-transcript'
+import { MessageAttachmentList } from './message-attachments'
 
 type ConversationMessagesProps = {
-  messages: ConversationMessage[]
+  messages: ConversationItem[]
   running: boolean
+  repository: ProjectRepository
+  repositoryFiles: readonly RepositoryFile[]
+  onOpenRepositoryFile: (path: string) => void
 }
 
-export const ConversationMessages = ({ messages, running }: ConversationMessagesProps) => {
+const MarkdownContent = lazy(async () => {
+  const module = await import('../../components/markdown-content')
+  return { default: module.MarkdownContent }
+})
+
+const DrawnItem = ({
+  item,
+  repository,
+  repositoryFiles,
+  onOpenRepositoryFile,
+}: {
+  item: ConversationStreamItem
+  repository: ProjectRepository
+  repositoryFiles: readonly RepositoryFile[]
+  onOpenRepositoryFile: (path: string) => void
+}) => {
+  if (item.kind === 'activity-group') return <ActivityBlock group={item} />
+  if (item.kind === 'thinking' || item.kind === 'tool') return <ActivityStep item={item} />
+  if (item.kind === 'notice')
+    return (
+      <p className="conversation-notice" role={item.failed ? 'alert' : 'status'}>
+        {item.text}
+      </p>
+    )
+
+  return (
+    <article
+      className="conversation-message"
+      aria-label={item.kind === 'user' ? 'You' : 'Assistant'}
+    >
+      <h2>{item.kind === 'user' ? 'You' : 'Assistant'}</h2>
+      {item.kind === 'user' ? (
+        <>
+          {item.text && <p className="conversation-user-text">{item.text}</p>}
+          <MessageAttachmentList
+            repository={repository}
+            files={item.attachments.flatMap(path => {
+              const file = repositoryFiles.find(candidate => candidate.path === path)
+              return file ? [file] : []
+            })}
+            onOpen={onOpenRepositoryFile}
+          />
+        </>
+      ) : (
+        <Suspense fallback={<p className="conversation-markdown-fallback">{item.text}</p>}>
+          <MarkdownContent text={item.text} />
+        </Suspense>
+      )}
+    </article>
+  )
+}
+
+export const ConversationMessages = ({
+  messages,
+  running,
+  repository,
+  repositoryFiles,
+  onOpenRepositoryFile,
+}: ConversationMessagesProps) => {
   const container = useRef<HTMLElement>(null)
   const follow = useRef(true)
-  const lastMessage = messages.at(-1)
-  const waiting = running && (lastMessage?.role !== 'assistant' || !lastMessage.text)
+  const stream = useMemo(() => groupConversationActivity(messages, running), [messages, running])
+  const lastItem = stream.at(-1)
+  const waiting = running && lastItem?.kind !== 'assistant' && lastItem?.kind !== 'activity-group'
 
   useEffect(() => {
     if (!messages.length && !running) return
@@ -28,41 +98,14 @@ export const ConversationMessages = ({ messages, running }: ConversationMessages
         follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48
       }}
     >
-      {messages.map(message => (
-        <article
-          key={message.id}
-          className="my-5 min-w-0"
-          aria-label={message.role === 'user' ? 'You' : 'Assistant'}
-        >
-          <h2 className="mb-1.5 text-xs font-medium text-muted">
-            {message.role === 'user' ? 'You' : 'Assistant'}
-          </h2>
-          <p className="whitespace-pre-wrap text-[13px] leading-6 [overflow-wrap:anywhere]">
-            {message.text}
-          </p>
-          {Boolean(message.tools?.length) && (
-            <ul className="mt-2 space-y-1 text-xs text-muted" aria-label="Tool activity">
-              {message.tools?.map(tool => (
-                <li
-                  key={tool.id}
-                  className="flex flex-wrap gap-x-2 gap-y-1 [overflow-wrap:anywhere]"
-                >
-                  <span className="font-medium">{tool.name}</span>
-                  {tool.path && <span>{tool.path}</span>}
-                  <span>{tool.status}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {message.notice && (
-            <p
-              className="mt-2 text-xs text-muted [overflow-wrap:anywhere]"
-              role={message.failed ? 'alert' : 'status'}
-            >
-              {message.notice}
-            </p>
-          )}
-        </article>
+      {stream.map(item => (
+        <DrawnItem
+          item={item}
+          key={item.key}
+          repository={repository}
+          repositoryFiles={repositoryFiles}
+          onOpenRepositoryFile={onOpenRepositoryFile}
+        />
       ))}
       {waiting && (
         <p role="status" className="my-4 text-xs text-muted">

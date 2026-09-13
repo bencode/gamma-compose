@@ -1,10 +1,11 @@
 /// <reference lib="dom" />
 
+import { previewAssetUrlKey } from './module-graph.js'
 import type { RuntimeManifest } from './runtime.js'
 
 const localDbPortKey = '__GAMMA_COMPOSE_LOCAL_DB_PORT__'
 
-function bootPreview(portKey: string, entry: string) {
+function bootPreview(portKey: string, assetUrlKey: string, entry: string) {
   let started = false
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
@@ -54,6 +55,70 @@ function bootPreview(portKey: string, entry: string) {
       ...(stack ? { stack: truncate(stack) } : {}),
     })
   }
+  function createAssetResolver(port: MessagePort) {
+    let requestId = 0
+    const pending = new Map<
+      number,
+      { resolve: (blob: Blob) => void; reject: (error: Error) => void }
+    >()
+    const cache = new Map<string, Promise<string>>()
+    const urls = new Set<string>()
+    port.addEventListener('message', event => {
+      const value: unknown = event.data
+      if (
+        typeof value !== 'object' ||
+        value === null ||
+        !('type' in value) ||
+        value.type !== 'asset:result' ||
+        !('id' in value) ||
+        typeof value.id !== 'number'
+      )
+        return
+      const request = pending.get(value.id)
+      if (!request) return
+      pending.delete(value.id)
+      if ('blob' in value && value.blob instanceof Blob) request.resolve(value.blob)
+      else
+        request.reject(
+          new Error(
+            'error' in value && typeof value.error === 'string'
+              ? value.error
+              : 'The local image could not be loaded.',
+          ),
+        )
+    })
+    port.addEventListener('messageerror', () => {
+      const error = new Error('The local asset bridge could not receive a response.')
+      pending.forEach(request => {
+        request.reject(error)
+      })
+      pending.clear()
+    })
+    port.start()
+    window.addEventListener('pagehide', () => {
+      urls.forEach(url => {
+        URL.revokeObjectURL(url)
+      })
+      urls.clear()
+      port.close()
+    })
+    return (path: string, hash: string) => {
+      const key = `${path}:${hash}`
+      const existing = cache.get(key)
+      if (existing) return existing
+      const request = new Promise<Blob>((resolve, reject) => {
+        const id = ++requestId
+        pending.set(id, { resolve, reject })
+        port.postMessage({ type: 'asset:read', id, path, hash })
+      }).then(blob => {
+        const url = URL.createObjectURL(blob)
+        urls.add(url)
+        return url
+      })
+      cache.set(key, request)
+      return request
+    }
+  }
   ;(['debug', 'log', 'info', 'warn', 'error'] as const).forEach(level => {
     const original = console[level].bind(console)
     Reflect.set(console, level, (...values: unknown[]) => {
@@ -98,10 +163,12 @@ function bootPreview(portKey: string, entry: string) {
     )
       return
     const databasePort = event.ports[0]
-    if (!databasePort)
-      return report('load', 'module', 'The preview database bridge is unavailable.')
+    const assetPort = event.ports[1]
+    if (!databasePort || !assetPort)
+      return report('load', 'module', 'The preview runtime bridges are unavailable.')
     started = true
     Reflect.set(window, portKey, databasePort)
+    Reflect.set(window, assetUrlKey, createAssetResolver(assetPort))
     try {
       await import(entry)
       post({ type: 'preview:loaded' })
@@ -122,4 +189,4 @@ export const createPreviewDocument = (
 <script type="importmap">${JSON.stringify(runtime)}</script>
 ${hasStyles ? '<link rel="stylesheet" href="./styles.css">' : ''}
 <style>html,body,#root{min-height:100%;margin:0}body{font-family:system-ui,sans-serif}</style>
-</head><body><div id="root"></div><script>const __name=target=>target;(${bootPreview.toString()})(${JSON.stringify(localDbPortKey)},${JSON.stringify(`./${entry}`)})</script></body></html>`
+</head><body><div id="root"></div><script>const __name=target=>target;(${bootPreview.toString()})(${JSON.stringify(localDbPortKey)},${JSON.stringify(previewAssetUrlKey)},${JSON.stringify(`./${entry}`)})</script></body></html>`

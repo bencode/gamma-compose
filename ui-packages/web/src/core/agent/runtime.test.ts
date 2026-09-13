@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { compileFiles } from '../compile/client'
 import { demoProject } from '../project/demo-project'
+import { createProjectRepository } from '../project/repository'
 import { createProjectStore } from '../project/store'
+import { createAnalyzeImageTool } from './analyze-image-tool'
 import { createCompileTool } from './compile-tool'
 import { type AgentPreview, createConversationAgent } from './runtime'
 
@@ -31,13 +33,23 @@ const createPreview = (changes: Partial<AgentPreview> = {}): AgentPreview => ({
   readConsole: () => ({ buildId: 1, entries: [], dropped: 0 }),
   ...changes,
 })
-const createAgent = (modelConfig = config) =>
-  createConversationAgent(
+const repositoryFor = (project: ReturnType<typeof createProjectStore>) =>
+  createProjectRepository(
+    'test-project',
+    project,
+    { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
+    [],
+  )
+const createAgent = (modelConfig = config) => {
+  const project = createProjectStore(demoProject)
+  return createConversationAgent(
     modelConfig,
     'test-project',
-    createProjectStore(demoProject),
+    project,
+    repositoryFor(project),
     createPreview(),
   )
+}
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
   `data: ${JSON.stringify({ id: 'completion', choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`
 const reply = () =>
@@ -52,6 +64,32 @@ const reply = () =>
 afterEach(() => vi.restoreAllMocks())
 
 describe('browser Pi runtime', () => {
+  it('exposes the stable image-analysis contract without pretending analysis is available', async () => {
+    const project = createProjectStore(demoProject)
+    const repository = createProjectRepository(
+      'test-project',
+      project,
+      { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
+      [
+        {
+          id: 'reference',
+          projectId: 'test-project',
+          path: 'attachments/reference.png',
+          mediaType: 'image/png',
+          size: 5,
+          createdAt: 1,
+          updatedAt: 1,
+          revision: 1,
+        },
+      ],
+    )
+    const tool = createAnalyzeImageTool(repository)
+
+    await expect(
+      tool.execute('analyze', { path: 'attachments/reference.png', question: 'What is shown?' }),
+    ).rejects.toThrow('not available yet')
+  })
+
   it.each([
     [500, 'service'],
     [503, 'service'],
@@ -155,6 +193,7 @@ describe('browser Pi runtime', () => {
       config,
       'test-project',
       project,
+      repositoryFor(project),
       createPreview({
         compile: signal =>
           compileFiles(
@@ -221,10 +260,12 @@ describe('browser Pi runtime', () => {
           'Indexes require distinct string or numeric fields with identifier names, not paths.',
         ),
       )
+    const project = createProjectStore(demoProject)
     const agent = createConversationAgent(
       config,
       'test-project',
-      createProjectStore(demoProject),
+      project,
+      repositoryFor(project),
       createPreview({ refresh }),
     )
     await agent.prompt('Refresh the preview.')
@@ -302,8 +343,10 @@ describe('browser Pi runtime', () => {
     expect(agent.state.tools.map(tool => tool.name)).toEqual([
       'list',
       'read',
+      'copy',
       'edit',
       'write',
+      'analyze_image',
       'db_get',
       'db_list',
       'db_create',
@@ -381,12 +424,16 @@ describe('browser Pi runtime', () => {
 
   it('rejects unsupported configured models rather than silently replacing them', () => {
     expect(() =>
-      createConversationAgent(
-        { ...config, modelId: 'unknown' },
-        'test-project',
-        createProjectStore(demoProject),
-        createPreview(),
-      ),
+      (() => {
+        const project = createProjectStore(demoProject)
+        return createConversationAgent(
+          { ...config, modelId: 'unknown' },
+          'test-project',
+          project,
+          repositoryFor(project),
+          createPreview(),
+        )
+      })(),
     ).toThrow('Unsupported GLM')
   })
 })

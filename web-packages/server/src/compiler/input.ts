@@ -19,7 +19,9 @@ export const isProjectPath = (path: string) =>
   !path.split('/').some(part => part === '..' || part === '.' || part === '') &&
   posix.normalize(path) === path
 
-const isSourcePath = (path: string) => /\.(?:tsx?|jsx?|json|css)$/.test(path)
+export const isAssetPath = (path: string) => /^src\/assets\/.+\.(?:png|jpe?g|webp|gif)$/i.test(path)
+const isTextSourcePath = (path: string) => /\.(?:tsx?|jsx?|json|css)$/.test(path)
+const isSourcePath = (path: string) => isTextSourcePath(path) || isAssetPath(path)
 const isHash = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 
@@ -52,7 +54,10 @@ const readChanges = (value: unknown, sourceTree: SourceTree) => {
   if (
     entries.some(
       ([path, contents]) =>
-        !isProjectPath(path) || typeof contents !== 'string' || !Object.hasOwn(sourceTree, path),
+        !isProjectPath(path) ||
+        !isTextSourcePath(path) ||
+        typeof contents !== 'string' ||
+        !Object.hasOwn(sourceTree, path),
     )
   )
     throw new InvalidCompileInput('changes must contain text for files declared in sourceTree')

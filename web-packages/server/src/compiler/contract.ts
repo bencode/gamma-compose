@@ -20,7 +20,7 @@ export type CompileDiagnostic = {
 }
 
 export type CompiledFile = {
-  kind: 'module' | 'style'
+  kind: 'module' | 'style' | 'asset'
   sourceHash: string
   sourceBytes: number
   outputHash: string

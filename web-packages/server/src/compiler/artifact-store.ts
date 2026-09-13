@@ -151,10 +151,13 @@ export const createArtifactStore = (dataRoot: string) => {
     const manifest = await loadBuild(projectId, buildId)
     if (!manifest) return undefined
     const modules = Object.fromEntries(
-      Object.entries(manifest.files).filter(([, file]) => file.kind === 'module'),
+      Object.entries(manifest.files).filter(
+        ([, file]) => file.kind === 'module' || file.kind === 'asset',
+      ),
     )
     const sourcePath = resolveProjectPath(requestPath, modules)
-    return sourcePath ? manifest.files[sourcePath]?.outputPath : undefined
+    const file = sourcePath ? manifest.files[sourcePath] : undefined
+    return file?.outputPath
   }
 
   return { publicRoot, loadBuild, loadCurrent, readArtifact, publish, resolveModule }

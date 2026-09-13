@@ -114,8 +114,10 @@ their own access control before making it remotely accessible.
   request and propagates cancellation upstream; it cannot undo provider charges.
 - Partial responses remain visible after failure or cancellation. Pi excludes
   failed/aborted assistant messages from subsequent model requests.
-- Replies are plain text, not executable HTML or rendered Markdown. Internal
-  reasoning is not displayed. Refresh clears the conversation and draft.
+- Assistant text renders as safe GFM Markdown; raw HTML is not executed. Pi
+  thinking and tool activity appear in disclosures. Live activity shows its step
+  list and folds after completion; each step can reveal bounded input or output.
+  User text stays literal. Refresh clears the conversation and draft.
 
 ### Chat acceptance checks
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { openProjectDatabase, type ProjectDatabase } from '../../core/project/database'
 import type { Project } from '../../core/project/records'
+import { createProjectRepository, type ProjectRepository } from '../../core/project/repository'
 import { createProjectStore, type ProjectStore } from '../../core/project/store'
 import { Workbench } from '../../shell/workbench'
 
@@ -9,6 +10,7 @@ type LoadedProject = {
   record: Project
   project: ProjectStore
   database: ProjectDatabase
+  repository: ProjectRepository
   retrySave: () => void
 }
 
@@ -23,6 +25,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
     let active = true
     let connection: ProjectDatabase | undefined
     let unsubscribe: (() => void) | undefined
+    let repository: ProjectRepository | undefined
     setError(undefined)
     const load = async () => {
       try {
@@ -39,6 +42,9 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
           return
         }
         const project = createProjectStore({ entry: record.entry, files: record.files })
+        const storedFiles = await database.listStoredFiles(record.id)
+        if (!active) return
+        repository = createProjectRepository(record.id, project, database, storedFiles)
         const save = async () => {
           const snapshot = project.getSnapshot()
           setSaveStatus('saving')
@@ -62,7 +68,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
           void save()
         }
         unsubscribe = project.subscribe(retrySave)
-        setLoaded({ record, project, database, retrySave })
+        setLoaded({ record, project, database, repository, retrySave })
       } catch (cause) {
         console.error('Could not load the project.', cause)
         if (active)
@@ -77,6 +83,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
     return () => {
       active = false
       unsubscribe?.()
+      repository?.dispose()
       connection?.close()
     }
   }, [id])
@@ -86,6 +93,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
       <Workbench
         projectId={loaded.record.id}
         project={loaded.project}
+        repository={loaded.repository}
         projectName={loaded.record.name}
         compilePersistence={{
           load: () => loaded.database.getCompileState(loaded.record.id),

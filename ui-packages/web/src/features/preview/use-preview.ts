@@ -4,6 +4,7 @@ import type { CompileDiagnostic, CompileResult } from '@gamma-compose/server/com
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createCompileCoordinator } from '../../core/compile/coordinator'
 import type { ProjectCompileState } from '../../core/project/records'
+import type { ProjectRepository } from '../../core/project/repository'
 import type { ProjectSnapshot, ProjectStore } from '../../core/project/store'
 import { createPreviewDiagnostics, type PreviewDiagnostics } from './preview-diagnostics'
 import type { PreviewMessage } from './preview-document'
@@ -25,6 +26,7 @@ export type PreviewState =
 
 type CompiledArtifact = {
   snapshot: ProjectSnapshot
+  repositoryFiles: ReturnType<ProjectRepository['getFiles']>
   result: Extract<CompileResult, { ok: true }>
 }
 
@@ -46,6 +48,7 @@ const rejectWaiter = (pending: RefreshWaiter | undefined, cause: Error) => {
 export const usePreview = (
   projectId: string,
   project: ProjectStore,
+  repository: ProjectRepository,
   compilePersistence: {
     load: () => Promise<ProjectCompileState | undefined>
     save: (state: ProjectCompileState) => Promise<void>
@@ -54,7 +57,7 @@ export const usePreview = (
   const activeRequest = useRef<AbortController | null>(null)
   const artifact = useRef<CompiledArtifact | undefined>(undefined)
   const coordinator = useRef<ReturnType<typeof createCompileCoordinator>>(undefined)
-  coordinator.current ??= createCompileCoordinator(projectId, compilePersistence)
+  coordinator.current ??= createCompileCoordinator(projectId, compilePersistence, repository)
   const compileCoordinator = coordinator.current
   const waiter = useRef<RefreshWaiter | undefined>(undefined)
   const buildId = useRef(0)
@@ -76,6 +79,7 @@ export const usePreview = (
         ? AbortSignal.any([signal, controller.signal])
         : controller.signal
       const snapshot = project.getSnapshot()
+      const repositoryFiles = repository.getFiles()
       artifact.current = undefined
       setState(current => ({
         status: 'compiling',
@@ -97,7 +101,7 @@ export const usePreview = (
         if (activeRequest.current !== controller)
           throw new DOMException('Compilation superseded.', 'AbortError')
         if (result.ok) {
-          artifact.current = { snapshot, result }
+          artifact.current = { snapshot, repositoryFiles, result }
           setState(current => ({
             status: 'compiled',
             ...(current.frame ? { frame: current.frame } : {}),
@@ -130,7 +134,7 @@ export const usePreview = (
         if (activeRequest.current === controller) activeRequest.current = null
       }
     },
-    [compileCoordinator, project],
+    [compileCoordinator, project, repository],
   )
 
   const refresh = useCallback(
@@ -139,7 +143,11 @@ export const usePreview = (
       if (activeRequest.current)
         return Promise.reject(new Error('Wait for compilation to finish before refreshing.'))
       const current = artifact.current
-      if (!current || current.snapshot !== project.getSnapshot())
+      if (
+        !current ||
+        current.snapshot !== project.getSnapshot() ||
+        current.repositoryFiles !== repository.getFiles()
+      )
         return Promise.reject(
           new Error('Compile the current project successfully before refreshing.'),
         )
@@ -228,7 +236,7 @@ export const usePreview = (
         if (signal?.aborted) onAbort()
       })
     },
-    [diagnostics, project],
+    [diagnostics, project, repository],
   )
 
   const onMessage = useCallback(
@@ -307,6 +315,60 @@ export const usePreview = (
     [projectId],
   )
 
+  const openAssetBridge = useCallback(
+    (port: MessagePort) => {
+      let closed = false
+      port.addEventListener('message', event => {
+        const value: unknown = event.data
+        if (
+          typeof value !== 'object' ||
+          value === null ||
+          !('type' in value) ||
+          value.type !== 'asset:read' ||
+          !('id' in value) ||
+          !Number.isSafeInteger(value.id) ||
+          !('path' in value) ||
+          typeof value.path !== 'string' ||
+          !('hash' in value) ||
+          typeof value.hash !== 'string'
+        ) {
+          console.error('The preview sent an invalid local asset request.', value)
+          return
+        }
+        const { id, path, hash } = value
+        void Promise.resolve()
+          .then(async () => {
+            const current = artifact.current
+            if (!current || current.repositoryFiles !== repository.getFiles())
+              throw new Error('Compile the current project before loading local images.')
+            const file = current.result.build.files[path]
+            if (file?.kind !== 'asset' || file.sourceHash !== hash)
+              throw new Error(`The compiled build does not contain this local image: ${path}`)
+            return repository.readBlob(path)
+          })
+          .then(blob => {
+            if (!closed) port.postMessage({ type: 'asset:result', id, blob })
+          })
+          .catch(error => {
+            console.error('Could not load a local preview image.', error)
+            if (!closed)
+              port.postMessage({
+                type: 'asset:result',
+                id,
+                error:
+                  error instanceof Error ? error.message : 'The local image could not be loaded.',
+              })
+          })
+      })
+      port.start()
+      return () => {
+        closed = true
+        port.close()
+      }
+    },
+    [repository],
+  )
+
   const readErrors = useCallback(() => diagnostics.readErrors(), [diagnostics])
   const readConsole = useCallback(() => diagnostics.readConsole(), [diagnostics])
 
@@ -317,6 +379,7 @@ export const usePreview = (
     retry,
     onMessage,
     openDatabaseBridge,
+    openAssetBridge,
     readErrors,
     readConsole,
   }

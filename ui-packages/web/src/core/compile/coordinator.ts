@@ -5,14 +5,16 @@ import type {
   SourceTree,
 } from '@gamma-compose/server/compile-contract'
 import type { ProjectCompileState } from '../project/records'
+import type { ProjectRepository } from '../project/repository'
+import { blobBytes } from '../project/repository-files'
 import type { ProjectSnapshot } from '../project/store'
 import { compileFiles, getCompiledTree } from './client'
 
 const sourcePattern = /\.(?:tsx?|jsx?|json|css)$/
+const assetPattern = /^src\/assets\/.+\.(?:png|jpe?g|webp|gif)$/i
 const encoder = new TextEncoder()
 
-const hash = async (contents: string) => {
-  const bytes = encoder.encode(contents)
+const hashBytes = async (bytes: Uint8Array<ArrayBuffer>) => {
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return {
     hash: [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join(''),
@@ -20,14 +22,29 @@ const hash = async (contents: string) => {
   } satisfies SourceFileDescriptor
 }
 
-const describeSources = async (snapshot: ProjectSnapshot): Promise<SourceTree> =>
-  Object.fromEntries(
-    await Promise.all(
-      Object.entries(snapshot.files)
-        .filter(([path]) => sourcePattern.test(path))
-        .map(async ([path, contents]) => [path, await hash(contents)] as const),
-    ),
+const hash = (contents: string) => hashBytes(encoder.encode(contents))
+
+const describeSources = async (snapshot: ProjectSnapshot, repository: ProjectRepository) => {
+  const textEntries = await Promise.all(
+    Object.entries(snapshot.files)
+      .filter(([path]) => sourcePattern.test(path))
+      .map(async ([path, contents]) => [path, await hash(contents)] as const),
   )
+  const assetEntries = await Promise.all(
+    repository
+      .getFiles()
+      .filter(file => file.kind === 'image' && assetPattern.test(file.path))
+      .map(async file => {
+        const blob = await repository.readBlob(file.path)
+        const bytes = new Uint8Array(await blobBytes(blob))
+        return [file.path, { blob, descriptor: await hashBytes(bytes) }] as const
+      }),
+  )
+  return Object.fromEntries([
+    ...textEntries,
+    ...assetEntries.map(([path, asset]) => [path, asset.descriptor] as const),
+  ]) satisfies SourceTree
+}
 
 const changedContents = (
   snapshot: ProjectSnapshot,
@@ -46,6 +63,7 @@ const changedContents = (
           previous?.sourceHash !== descriptor.hash || previous.sourceBytes !== descriptor.bytes
         return sourceChanged || (sourcePathsChanged && !path.endsWith('.css'))
       })
+      .filter(([path]) => Object.hasOwn(snapshot.files, path))
       .map(([path]) => [path, snapshot.files[path] ?? '']),
   )
 }
@@ -63,7 +81,11 @@ type CompilePersistence = {
   save: (state: ProjectCompileState) => Promise<void>
 }
 
-export const createCompileCoordinator = (projectId: string, persistence: CompilePersistence) => {
+export const createCompileCoordinator = (
+  projectId: string,
+  persistence: CompilePersistence,
+  repository: ProjectRepository,
+) => {
   let baseline: CompiledTree | undefined
   let initialized = false
 
@@ -90,7 +112,7 @@ export const createCompileCoordinator = (projectId: string, persistence: Compile
     signal: AbortSignal,
   ): Promise<CompileBuildResult> => {
     await initialize(signal)
-    const sourceTree = await describeSources(snapshot)
+    const sourceTree = await describeSources(snapshot, repository)
     if (baseline && matches(snapshot, sourceTree, baseline))
       return { ok: true, build: baseline, warnings: [] }
 

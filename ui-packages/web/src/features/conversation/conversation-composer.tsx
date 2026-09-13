@@ -1,8 +1,9 @@
-import { ArrowUp, Check, Square } from 'lucide-react'
-import { useLayoutEffect, useRef } from 'react'
-import type { ModelOption } from './model-control'
-import { ModelControl } from './model-control'
+import { ArrowUp, Paperclip, Square } from 'lucide-react'
+import { useLayoutEffect, useRef, useState } from 'react'
+import type { ProjectRepository } from '../../core/project/repository'
+import { MessageAttachmentList } from './message-attachments'
 import type { ConversationPhase } from './use-conversation'
+import type { MessageAttachments } from './use-message-attachments'
 
 type SaveStatus = 'saving' | 'saved' | 'error'
 
@@ -11,7 +12,8 @@ type ConversationComposerProps = {
   phase: ConversationPhase
   status?: string
   error?: string
-  model?: ModelOption
+  repository: ProjectRepository
+  attachments: MessageAttachments
   saveStatus: SaveStatus
   saveError?: string
   setDraft: (draft: string) => void
@@ -53,17 +55,7 @@ const PersistenceStatus = ({
         Saving…
       </span>
     )
-  return (
-    <span
-      className="persistence-status persistence-status-saved"
-      role="status"
-      aria-label="Saved in this browser"
-      title="Saved in this browser"
-    >
-      Local
-      <Check aria-hidden="true" size={13} strokeWidth={2} />
-    </span>
-  )
+  return null
 }
 
 export const ConversationComposer = ({
@@ -71,7 +63,8 @@ export const ConversationComposer = ({
   phase,
   status,
   error,
-  model,
+  repository,
+  attachments,
   saveStatus,
   saveError,
   setDraft,
@@ -80,6 +73,8 @@ export const ConversationComposer = ({
   onRetrySave,
 }: ConversationComposerProps) => {
   const textarea = useRef<HTMLTextAreaElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [draggingFiles, setDraggingFiles] = useState(false)
   const running = phase === 'running' || phase === 'stopping'
   const inputDisabled = phase === 'initializing' || phase === 'unavailable' || phase === 'error'
 
@@ -102,7 +97,28 @@ export const ConversationComposer = ({
           </p>
         )}
       </div>
-      <div className="composer-surface">
+      <fieldset
+        className="composer-surface"
+        data-dragging={draggingFiles || undefined}
+        onDragEnter={event => {
+          if (!event.dataTransfer.types.includes('Files')) return
+          event.preventDefault()
+          setDraggingFiles(true)
+        }}
+        onDragOver={event => {
+          if (event.dataTransfer.types.includes('Files')) event.preventDefault()
+        }}
+        onDragLeave={event => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setDraggingFiles(false)
+        }}
+        onDrop={event => {
+          event.preventDefault()
+          setDraggingFiles(false)
+          void attachments.selectFiles([...event.dataTransfer.files])
+        }}
+      >
+        <legend className="sr-only">Message input</legend>
         <label className="sr-only" htmlFor="draft">
           Message
         </label>
@@ -113,6 +129,12 @@ export const ConversationComposer = ({
           value={draft}
           disabled={inputDisabled}
           onChange={event => setDraft(event.target.value)}
+          onPaste={event => {
+            const files = [...event.clipboardData.files]
+            if (!files.length) return
+            event.preventDefault()
+            void attachments.selectFiles(files, 'clipboard')
+          }}
           onKeyDown={event => {
             if (
               event.key !== 'Enter' ||
@@ -128,10 +150,41 @@ export const ConversationComposer = ({
           rows={1}
           spellCheck={false}
         />
+        <MessageAttachmentList
+          repository={repository}
+          files={attachments.selectedFiles}
+          onRemove={attachments.detachPath}
+        />
+        {attachments.notice && (
+          <p className="attachment-notice" role="status">
+            {attachments.notice}
+          </p>
+        )}
         <div className="composer-actions">
           <div className="composer-context">
             <PersistenceStatus status={saveStatus} error={saveError} onRetry={onRetrySave} />
-            {model && <ModelControl value={model.id} options={[model]} disabled />}
+            <input
+              ref={fileInput}
+              className="sr-only"
+              type="file"
+              accept=".md,.markdown,image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              tabIndex={-1}
+              onChange={event => {
+                void attachments.selectFiles([...(event.target.files ?? [])])
+                event.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              className="composer-attach"
+              aria-label="Attach files"
+              title="Attach Markdown or images"
+              disabled={inputDisabled}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Paperclip aria-hidden="true" size={15} />
+            </button>
           </div>
           <button
             className="composer-submit"
@@ -142,7 +195,11 @@ export const ConversationComposer = ({
               if (running) stop()
               else void send()
             }}
-            disabled={phase === 'stopping' || (!running && (phase !== 'ready' || !draft.trim()))}
+            disabled={
+              phase === 'stopping' ||
+              (!running &&
+                (phase !== 'ready' || (!draft.trim() && !attachments.selectedPaths.length)))
+            }
           >
             {running ? (
               <Square aria-hidden="true" size={12} fill="currentColor" />
@@ -151,7 +208,7 @@ export const ConversationComposer = ({
             )}
           </button>
         </div>
-      </div>
+      </fieldset>
     </section>
   )
 }

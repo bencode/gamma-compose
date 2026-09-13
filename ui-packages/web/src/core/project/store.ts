@@ -7,6 +7,7 @@ export type ProjectStore = {
   getSnapshot: () => ProjectSnapshot
   subscribe: (listener: () => void) => () => void
   writeFile: (path: string, content: string) => void
+  removeFile: (path: string) => void
 }
 
 const maxProjectFiles = 1_024
@@ -58,6 +59,20 @@ export const createProjectStore = (initial: ProjectSnapshot): ProjectStore => {
       const next = { entry: snapshot.entry, files: { ...snapshot.files, [path]: content } }
       validateSnapshot(next)
       snapshot = Object.freeze({ ...next, files: Object.freeze(next.files) })
+      listeners.forEach(notify => {
+        notify()
+      })
+    },
+    removeFile: path => {
+      validateProjectPath(path)
+      if (!Object.hasOwn(snapshot.files, path)) return
+      if (path === snapshot.entry) throw new Error('The project entry cannot be removed.')
+      const files = Object.fromEntries(
+        Object.entries(snapshot.files).filter(([current]) => current !== path),
+      )
+      const next = { entry: snapshot.entry, files }
+      validateSnapshot(next)
+      snapshot = Object.freeze({ ...next, files: Object.freeze(files) })
       listeners.forEach(notify => {
         notify()
       })

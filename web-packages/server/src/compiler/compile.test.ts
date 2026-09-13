@@ -150,6 +150,47 @@ createRoot(document.getElementById('root')!).render(<main className="p-8">Ready<
     ).toContain('blue')
   })
 
+  it('publishes image imports as local bridge modules and hard-links unchanged wrappers', async () => {
+    const projectId = 'asset-incremental'
+    const image = new TextEncoder().encode('first-image')
+    const files = {
+      'src/main.tsx': "import heroUrl from './assets/hero.png'; console.log(heroUrl)",
+    }
+    const firstRequest = request(files)
+    firstRequest.sourceTree['src/assets/hero.png'] = {
+      hash: createHash('sha256').update(image).digest('hex'),
+      bytes: image.byteLength,
+    }
+    const first = await compiler.compile(projectId, firstRequest)
+    if (!first.ok) throw new Error('Asset compilation failed')
+    const asset = first.build.files['src/assets/hero.png']
+    expect(asset).toMatchObject({ kind: 'asset' })
+    if (asset?.kind !== 'asset') throw new Error('Compiled asset is missing')
+    const wrapper = await readFile(
+      artifactPath(projectId, first.build.buildId, asset.outputPath),
+      'utf8',
+    )
+    expect(wrapper).toContain('__GAMMA_COMPOSE_ASSET_URL__')
+    expect(wrapper).toContain('src/assets/hero.png')
+    expect(wrapper).not.toContain('first-image')
+    expect(
+      await compiler.resolveModule(projectId, first.build.buildId, 'src/assets/hero.png'),
+    ).toBe(asset.outputPath)
+
+    const updatedFiles = { ...files, 'src/main.tsx': `${files['src/main.tsx']}\nexport {}` }
+    const secondRequest = request(updatedFiles, first.build.buildId, {
+      'src/main.tsx': updatedFiles['src/main.tsx'],
+    })
+    secondRequest.sourceTree['src/assets/hero.png'] = firstRequest.sourceTree['src/assets/hero.png']
+    const second = await compiler.compile(projectId, secondRequest)
+    if (!second.ok) throw new Error('Incremental asset compilation failed')
+    const firstWrapper = await stat(artifactPath(projectId, first.build.buildId, asset.outputPath))
+    const secondWrapper = await stat(
+      artifactPath(projectId, second.build.buildId, asset.outputPath),
+    )
+    expect(secondWrapper.ino).toBe(firstWrapper.ino)
+  })
+
   it('recompiles module metadata when source paths change import resolution', async () => {
     const projectId = 'structural-delta'
     const firstFiles = {

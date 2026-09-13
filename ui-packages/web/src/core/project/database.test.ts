@@ -121,5 +121,63 @@ describe('local projects', () => {
     }
     await database.saveCompileState(state)
     expect(await database.getCompileState(project.id)).toEqual(state)
+    expect(await database.listStoredFiles(project.id)).toEqual([])
+  })
+
+  it('stores, isolates and atomically deletes repository metadata and contents', async () => {
+    const database = await open()
+    const first = await database.createProject('blank')
+    const second = await database.createProject('blank')
+    const metadata = {
+      id: 'reference-image',
+      projectId: first.id,
+      path: 'attachments/reference.png',
+      mediaType: 'image/png',
+      size: 5,
+      createdAt: 1,
+      updatedAt: 2,
+      revision: 1,
+    }
+    await database.saveStoredFiles([{ metadata, blob: new Blob(['image'], { type: 'image/png' }) }])
+
+    expect(await database.listStoredFiles(first.id)).toEqual([metadata])
+    expect(await database.listStoredFiles(second.id)).toEqual([])
+    expect(await database.getStoredFileContent(metadata.id)).toBeDefined()
+
+    await database.deleteStoredFile(metadata.id)
+    expect(await database.listStoredFiles(first.id)).toEqual([])
+    expect(await database.getStoredFileContent(metadata.id)).toBeUndefined()
+  })
+
+  it('stores copied metadata against shared content and deletes content only when requested', async () => {
+    const database = await open()
+    const project = await database.createProject('blank')
+    const source = {
+      id: 'source-file',
+      contentId: 'shared-content',
+      projectId: project.id,
+      path: 'attachments/reference.png',
+      mediaType: 'image/png',
+      size: 5,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+    }
+    const copy = {
+      ...source,
+      id: 'copied-file',
+      path: 'src/assets/reference.png',
+    }
+    await database.saveStoredFiles([
+      { metadata: source, blob: new Blob(['image'], { type: 'image/png' }) },
+    ])
+    await database.saveStoredFileMetadata(copy)
+
+    expect(await database.getStoredFileContent('shared-content')).toBeDefined()
+    await database.deleteStoredFile(source.id, null)
+    expect(await database.listStoredFiles(project.id)).toEqual([copy])
+    expect(await database.getStoredFileContent('shared-content')).toBeDefined()
+    await database.deleteStoredFile(copy.id, 'shared-content')
+    expect(await database.getStoredFileContent('shared-content')).toBeUndefined()
   })
 })

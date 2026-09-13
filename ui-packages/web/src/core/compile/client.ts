@@ -21,7 +21,7 @@ const isDiagnostics = (value: unknown): value is CompileDiagnostic[] =>
 
 const isCompiledFile = (value: unknown): value is CompiledFile =>
   isRecord(value) &&
-  (value.kind === 'module' || value.kind === 'style') &&
+  (value.kind === 'module' || value.kind === 'style' || value.kind === 'asset') &&
   typeof value.sourceHash === 'string' &&
   Number.isSafeInteger(value.sourceBytes) &&
   typeof value.outputHash === 'string' &&

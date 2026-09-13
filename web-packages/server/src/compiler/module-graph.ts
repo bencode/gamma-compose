@@ -3,6 +3,7 @@ import { extname } from 'node:path'
 import { parse } from 'es-module-lexer'
 import { type Message, transform } from 'esbuild'
 import type { CompileDiagnostic, CompiledFile, SourceTree } from './contract.js'
+import { isAssetPath } from './input.js'
 import {
   ProjectResolveError,
   resolveProjectImport,
@@ -17,7 +18,8 @@ export type ModuleMetadata = CompiledFile & {
 }
 
 export type StyleMetadata = CompiledFile & { kind: 'style' }
-export type BuildFileMetadata = ModuleMetadata | StyleMetadata
+export type AssetMetadata = CompiledFile & { kind: 'asset' }
+export type BuildFileMetadata = ModuleMetadata | StyleMetadata | AssetMetadata
 
 export type CompiledArtifact = {
   path: string
@@ -35,6 +37,7 @@ export class ModuleCompileError extends Error {
 export const hashText = (value: string) => createHash('sha256').update(value).digest('hex')
 export const moduleOutputPath = (path: string) => `modules/${path}.js`
 export const styleOutputPath = (path: string) => `styles/${path}`
+export const previewAssetUrlKey = '__GAMMA_COMPOSE_ASSET_URL__'
 
 const diagnostic = ({ text, location }: Message): CompileDiagnostic => ({
   message: text,
@@ -138,6 +141,27 @@ export const compileModule = async (
   }
 }
 
+export const compileAsset = (path: string, sourceTree: SourceTree): CompiledArtifact => {
+  const descriptor = sourceTree[path]
+  if (!descriptor || !isAssetPath(path))
+    throw new ModuleCompileError([{ message: `Unsupported asset: ${path}`, path }])
+  const contents = `const resolveAsset = globalThis[${JSON.stringify(previewAssetUrlKey)}];
+if (typeof resolveAsset !== "function") throw new Error("The local asset bridge is unavailable.");
+export default await resolveAsset(${JSON.stringify(path)}, ${JSON.stringify(descriptor.hash)});\n`
+  return {
+    path,
+    contents,
+    metadata: {
+      kind: 'asset',
+      sourceHash: descriptor.hash,
+      sourceBytes: descriptor.bytes,
+      outputHash: hashText(contents),
+      outputPath: moduleOutputPath(path),
+    },
+    warnings: [],
+  }
+}
+
 export const compileStyle = async (
   path: string,
   source: string,
@@ -172,9 +196,10 @@ export const collectReachableStyles = (
     if (file?.kind !== 'module')
       throw new ModuleCompileError([{ message: `Compiled module is unavailable: ${path}`, path }])
     file.dependencies.forEach(dependency => {
-      if (!files[dependency])
+      const dependencyFile = files[dependency]
+      if (!dependencyFile)
         throw new ModuleCompileError([{ message: `File not found: ${dependency}`, path }])
-      visit(dependency)
+      if (dependencyFile.kind === 'module') visit(dependency)
     })
   }
   visit(entry)
