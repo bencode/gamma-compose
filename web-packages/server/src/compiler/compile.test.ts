@@ -1,14 +1,18 @@
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createProjectCompiler } from './compile.js'
 import type { CompileBuildInput } from './contract.js'
+import { runtimeVersion } from './runtime.js'
 
 let dataRoot = ''
 let compiler: ReturnType<typeof createProjectCompiler>
+const runNode = promisify(execFile)
 
 beforeAll(async () => {
   dataRoot = await mkdtemp(join(tmpdir(), 'gamma-compose-compiler-'))
@@ -68,9 +72,9 @@ createRoot(document.getElementById('root')!).render(<main className="p-8">Ready<
     expect(css).toContain('.p-8')
     expect(css).toContain('.project-heading')
     expect(document).toContain('<script type="importmap">')
-    expect(document).toContain('/__preview/runtime/2/')
+    expect(document).toContain(`/__preview/runtime/${runtimeVersion}/`)
     const runtimeManifest = JSON.parse(
-      await readFile(join(dataRoot, 'public', 'runtime', '2', 'manifest.json'), 'utf8'),
+      await readFile(join(dataRoot, 'public', 'runtime', runtimeVersion, 'manifest.json'), 'utf8'),
     ) as { imports: Record<string, string> }
     const runtimePath = join(
       dataRoot,
@@ -79,6 +83,18 @@ createRoot(document.getElementById('root')!).render(<main className="p-8">Ready<
     )
     const jsxRuntime = await import(pathToFileURL(runtimePath).href)
     expect(typeof jsxRuntime.jsx).toBe('function')
+    const uiRuntimePath = join(
+      dataRoot,
+      'public',
+      runtimeManifest.imports['@gamma-compose/ui']?.replace('/__preview/', '') ?? '',
+    )
+    await expect(
+      runNode(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        `const runtime = await import(${JSON.stringify(pathToFileURL(uiRuntimePath).href)}); runtime.Table({ children: 'Ready' })`,
+      ]),
+    ).resolves.toBeDefined()
     expect(result.build.previewUrl).toContain(`/projects/${projectId}/builds/`)
   }, 20_000)
 

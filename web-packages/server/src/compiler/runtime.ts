@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { build, type Plugin } from 'esbuild'
 
 export type RuntimeManifest = { imports: Record<string, string> }
-export const runtimeVersion = '2'
+export const runtimeVersion = '3'
 
 const serverBase = fileURLToPath(new URL('../../', import.meta.url))
 const entries: Record<string, string> = {
@@ -149,6 +149,8 @@ const buildRuntime = async (publicRoot: string): Promise<RuntimeManifest> => {
     format: 'esm',
     platform: 'browser',
     target: 'es2022',
+    tsconfigRaw: {},
+    jsx: 'automatic',
     conditions: ['source', 'development', 'browser'],
     minify: true,
     sourcemap: false,
