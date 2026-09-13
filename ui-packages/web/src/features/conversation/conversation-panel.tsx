@@ -3,6 +3,7 @@ import { ConversationComposer } from './conversation-composer'
 import { ConversationMessages } from './conversation-messages'
 import type { useConversation } from './use-conversation'
 import type { MessageAttachments } from './use-message-attachments'
+import type { useSessions } from './use-sessions'
 
 type ConversationPanelProps = ReturnType<typeof useConversation> & {
   saveStatus: 'saving' | 'saved' | 'error'
@@ -10,6 +11,7 @@ type ConversationPanelProps = ReturnType<typeof useConversation> & {
   onRetrySave: () => void
   repository: ProjectRepository
   attachments: MessageAttachments
+  sessions: ReturnType<typeof useSessions>
   onOpenRepositoryFile: (path: string) => void
 }
 
@@ -26,12 +28,15 @@ export const ConversationPanel = ({
   onRetrySave,
   repository,
   attachments,
+  sessions,
   onOpenRepositoryFile,
 }: ConversationPanelProps) => {
   const running = phase === 'running' || phase === 'stopping'
   const status =
     phase === 'initializing'
-      ? 'Connecting…'
+      ? sessions.loaded
+        ? 'Connecting…'
+        : 'Loading chats…'
       : phase === 'unavailable'
         ? 'Chat is temporarily unavailable.'
         : undefined
@@ -52,6 +57,7 @@ export const ConversationPanel = ({
         error={error}
         repository={repository}
         attachments={attachments}
+        sessions={sessions}
         saveStatus={saveStatus}
         saveError={saveError}
         setDraft={setDraft}

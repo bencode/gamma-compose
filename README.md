@@ -4,7 +4,7 @@ A browser workbench for building React pages. Project files live in the browser;
 a stateless Node service compiles them into JavaScript and CSS, which run in an
 isolated preview.
 
-## Current iteration: Template gallery and local projects
+## Current iteration: Local projects and chats
 
 - A resizable conversation panel and full-height preview or syntax-highlighted, read-only file browser.
 - One project entry and a browser-owned text-file tree compiled into static ESM modules.
@@ -12,6 +12,7 @@ isolated preview.
 - A runnable team workspace with project search, a status filter, and a dialog.
 - A gallery with Blank, Team workspace, and Product showcase templates.
 - Independent browser-local projects with automatic IndexedDB file saving.
+- Browser-local chats that restore their complete transcript per project.
 - Compilation diagnostics, preview loading errors, runtime errors, and retry.
 - All project copy, comments, and documentation are in English.
 - A browser-side Pi Agent with multi-turn GLM Coding Plan chat, streaming replies, and Stop.
@@ -25,9 +26,10 @@ project-local structured data, compile the current entry, and refresh the previe
 Compile diagnostics return to the Agent for source repair. Writes do not automatically
 compile or refresh. Stop keeps completed changes and cancels
 active generation or compilation; it does not roll back files.
-Project files save automatically in IndexedDB. Conversation history and drafts
-remain in memory and clear when leaving the workbench or refreshing. Desktop
-panel proportions are saved separately in this browser's localStorage.
+Project files and completed chat messages save automatically in IndexedDB. The latest
+chat reopens with its transcript; drafts and unsent attachment selections clear when
+leaving the workbench or refreshing. Desktop panel proportions are saved separately
+in this browser's localStorage.
 There is no source editor, Scene compiler, or module registry.
 There is no search tool, shell, package installation, deletion, or rename tool.
 See [Agent project tools](docs/agent-project-tools.md) for the technical flow.
@@ -38,8 +40,9 @@ Open `/` to choose a template or an existing project. Choosing a template create
 an independent copy and opens `/projects/:projectId`; choosing an existing project
 reopens it without copying. The workbench's back arrow returns to the gallery.
 
-The `gamma-compose` IndexedDB database (version 2) has `templates`, `projects`, and
-`compileStates` stores. Templates are seeded only when the database is created.
+The `gamma-compose` IndexedDB database (version 4) has `templates`, `projects`,
+`compileStates`, `files`, `contents`, `sessions`, and `sessionTranscripts` stores.
+Templates are seeded only when the database is created.
 Each project stores its name, last-modified timestamp, entry and complete text
 file collection. Compile state stores the last successful server build tree by
 project ID. Template updates do not overwrite existing browser data.
@@ -53,7 +56,8 @@ the saved compile state against the server's current derived tree and rebuilds w
 Projects belong to this browser and origin. URLs do not share project data with
 other devices. Clearing site data removes projects; browser storage is not a cloud
 backup. Database failures are shown with retry, not hidden behind temporary projects.
-There is no chat persistence, rename/delete UI, export, history, or cross-tab collaboration.
+Deleting a project also deletes its browser-local files, chats, application data, and
+compile state. There is no rename UI, export, chat branching, or cross-tab collaboration.
 
 Blank and Product showcase use `MemoryRouter` inside the sandboxed preview.
 Preview navigation does not change the editor URL. Do not use `BrowserRouter`
@@ -117,7 +121,7 @@ their own access control before making it remotely accessible.
 - Assistant text renders as safe GFM Markdown; raw HTML is not executed. Pi
   thinking and tool activity appear in disclosures. Live activity shows its step
   list and folds after completion; each step can reveal bounded input or output.
-  User text stays literal. Refresh clears the conversation and draft.
+  User text stays literal. Refresh restores the latest chat and clears its draft.
 
 ### Chat acceptance checks
 
@@ -309,7 +313,7 @@ remount the preview, while preserving the compiled result, draft, and file selec
 7. Exercise compilation and runtime failures; confirm an English error and a working retry.
 8. Start the production build and verify compilation without a development server.
 9. Ask the Agent to change the page, wait for Saved, refresh the project URL, and
-   verify the modified files return while the conversation is empty.
+   verify the modified files and latest completed chat return while the draft is empty.
 10. Return to the gallery, reopen the project, then create another from the same
     template. Verify the original project and the template are unchanged.
 11. Create Blank and Product showcase projects; check Hello and the expandable FAQ.

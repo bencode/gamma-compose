@@ -123,6 +123,91 @@ describe('local projects', () => {
     await database.saveCompileState(state)
     expect(await database.getCompileState(project.id)).toEqual(state)
     expect(await database.listStoredFiles(project.id)).toEqual([])
+    expect(await database.listChatSessions(project.id)).toEqual([])
+  })
+
+  it('migrates legacy embedded chat messages into independent transcripts', async () => {
+    const project = {
+      id: 'legacy-project',
+      name: 'Legacy',
+      updatedAt: 1,
+      entry: 'main.ts',
+      files: { 'main.ts': 'export {}' },
+    }
+    const legacySession = {
+      id: 'legacy-chat',
+      projectId: project.id,
+      title: 'Original chat',
+      createdAt: 1,
+      updatedAt: 2,
+      lastOpenedAt: 3,
+      messages: [{ role: 'user' as const, content: 'Remember this', timestamp: 4 }],
+    }
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('gamma-compose', 3)
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('templates', { keyPath: 'id' })
+        request.result.createObjectStore('projects', { keyPath: 'id' }).add(project)
+        request.result.createObjectStore('compileStates', { keyPath: 'projectId' })
+        const files = request.result.createObjectStore('files', { keyPath: 'id' })
+        files.createIndex('by-project-id', 'projectId')
+        files.createIndex('by-project-path', ['projectId', 'path'], { unique: true })
+        request.result.createObjectStore('contents', { keyPath: 'id' })
+        request.result
+          .createObjectStore('sessions', { keyPath: 'id' })
+          .createIndex('projectId', 'projectId')
+        request.transaction?.objectStore('sessions').add(legacySession)
+      }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        request.result.close()
+        resolve()
+      }
+    })
+
+    const database = await open()
+    expect(await database.listChatSessions(project.id)).toEqual([
+      {
+        id: legacySession.id,
+        projectId: project.id,
+        title: legacySession.title,
+        createdAt: 1,
+        updatedAt: 2,
+        lastOpenedAt: 3,
+      },
+    ])
+    expect(await database.getChatSession(project.id, legacySession.id)).toEqual(legacySession)
+  })
+
+  it('stores lightweight chat summaries and isolates complete transcripts by project', async () => {
+    const database = await open()
+    const first = await database.createProject('blank')
+    const second = await database.createProject('blank')
+    const older = await database.createChatSession(first.id, 'older-chat')
+    const latest = await database.createChatSession(first.id, 'latest-chat')
+    const other = await database.createChatSession(second.id, 'other-chat')
+    const saved = {
+      ...older,
+      title: 'Remember the layout',
+      updatedAt: older.updatedAt + 2,
+      lastOpenedAt: latest.lastOpenedAt + 2,
+      messages: [{ role: 'user' as const, content: 'Remember the layout', timestamp: 1 }],
+    }
+    await database.saveChatSession(saved)
+
+    expect(await database.listChatSessions(first.id)).toEqual([
+      (({ messages: _messages, ...metadata }) => metadata)(saved),
+      (({ messages: _messages, ...metadata }) => metadata)(latest),
+    ])
+    expect(await database.getChatSession(first.id, saved.id)).toEqual(saved)
+    expect(await database.getChatSession(second.id, saved.id)).toBeUndefined()
+    await expect(database.saveChatSession({ ...saved, projectId: second.id })).rejects.toThrow(
+      'Chat not found',
+    )
+    await expect(database.deleteChatSession(second.id, saved.id)).rejects.toThrow('Chat not found')
+    await database.deleteChatSession(first.id, saved.id)
+    expect(await database.getChatSession(first.id, saved.id)).toBeUndefined()
+    expect(await database.getChatSession(second.id, other.id)).toEqual(other)
   })
 
   it('stores, isolates and atomically deletes repository metadata and contents', async () => {
@@ -200,6 +285,12 @@ describe('local projects', () => {
     })
     await database.saveCompileState(compileState(first.id))
     await database.saveCompileState(compileState(second.id))
+    const firstChat = await database.createChatSession(first.id, 'first-chat')
+    const secondChat = await database.createChatSession(second.id, 'second-chat')
+    await database.saveChatSession({
+      ...firstChat,
+      messages: [{ role: 'user', content: 'Private history', timestamp: 1 }],
+    })
     const firstFile = {
       id: 'first-file',
       contentId: 'first-content',
@@ -250,10 +341,13 @@ describe('local projects', () => {
     expect(await database.getCompileState(first.id)).toBeUndefined()
     expect(await database.listStoredFiles(first.id)).toEqual([])
     expect(await database.getStoredFileContent('first-content')).toBeUndefined()
+    expect(await database.listChatSessions(first.id)).toEqual([])
+    expect(await database.getChatSession(first.id, firstChat.id)).toBeUndefined()
     expect(await database.getProject(second.id)).toEqual(second)
     expect(await database.getCompileState(second.id)).toEqual(compileState(second.id))
     expect(await database.listStoredFiles(second.id)).toEqual([secondFile])
     expect(await database.getStoredFileContent('second-content')).toBeDefined()
+    expect(await database.getChatSession(second.id, secondChat.id)).toEqual(secondChat)
     const reopened = await openLocalDb({
       databaseName: `project:${first.id}`,
       resources: [resource],

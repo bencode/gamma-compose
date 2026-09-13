@@ -40,7 +40,11 @@ const repositoryFor = (project: ReturnType<typeof createProjectStore>) =>
     { getStoredFileContent: async () => undefined, saveStoredFiles: async () => undefined },
     [],
   )
-const createAgent = (modelConfig = config) => {
+const chatSession = (messages: Parameters<typeof createConversationAgent>[5]['messages'] = []) => ({
+  id: 'test-chat',
+  messages,
+})
+const createAgent = (modelConfig = config, messages = chatSession().messages) => {
   const project = createProjectStore(demoProject)
   return createConversationAgent(
     modelConfig,
@@ -48,6 +52,7 @@ const createAgent = (modelConfig = config) => {
     project,
     repositoryFor(project),
     createPreview(),
+    chatSession(messages),
   )
 }
 const event = (delta: Record<string, unknown>, finishReason: string | null = null) =>
@@ -203,6 +208,7 @@ describe('browser Pi runtime', () => {
           ),
         refresh,
       }),
+      chatSession(),
     )
     await agent.prompt('Update the value and compile.')
     expect(compilations).toBe(2)
@@ -267,6 +273,7 @@ describe('browser Pi runtime', () => {
       project,
       repositoryFor(project),
       createPreview({ refresh }),
+      chatSession(),
     )
     await agent.prompt('Refresh the preview.')
     expect(refresh).toHaveBeenCalledOnce()
@@ -360,6 +367,48 @@ describe('browser Pi runtime', () => {
     expect(agent.state.tools.find(tool => tool.name === 'db_get')?.label).toBe('db.get')
   })
 
+  it('restores a saved Pi transcript before sending the next prompt', async () => {
+    const requests: RequestInit[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requests.push(init ?? {})
+      return reply()
+    })
+    const saved = [
+      { role: 'user' as const, content: 'Keep the blue header', timestamp: 1 },
+      {
+        role: 'assistant' as const,
+        content: [{ type: 'text' as const, text: 'I will keep it.' }],
+        api: 'openai-completions' as const,
+        provider: 'zai-coding-cn',
+        model: 'glm-5.3',
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop' as const,
+        timestamp: 2,
+      },
+    ]
+    const agent = createAgent(config, saved)
+
+    expect(agent.sessionId).toBe('test-chat')
+    expect(agent.state.messages).toEqual(saved)
+    await agent.prompt('Add a footer')
+    const payload = JSON.parse(String(requests[0]?.body))
+    expect(payload.messages.map((message: { role: string }) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ])
+    expect(JSON.stringify(payload.messages)).toContain('Keep the blue header')
+    expect(JSON.stringify(payload.messages)).toContain('Add a footer')
+  })
+
   it('keeps partial text on abort, settles before reuse and excludes the aborted answer from replay', async () => {
     let receivedText = false
     const requests: { init?: RequestInit }[] = []
@@ -432,6 +481,7 @@ describe('browser Pi runtime', () => {
           project,
           repositoryFor(project),
           createPreview(),
+          chatSession(),
         )
       })(),
     ).toThrow('Unsupported GLM')

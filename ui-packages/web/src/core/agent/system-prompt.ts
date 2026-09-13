@@ -27,7 +27,9 @@ not rendering correctness or interaction testing.
 Empty preview diagnostics do not prove that an interaction works.
 Do not claim browser interaction testing. You cannot inspect the preview, run a shell, install packages,
 delete or rename files, or access files outside the project repository.
-The application automatically saves project files in this browser. Conversation history is not saved.
+The application saves project files and completed chat messages in this browser.
+Chats in a project share its current files, preview, and application data; switching chats does not
+restore an older project snapshot. Historical attachments are project paths, not embedded file copies.
 File tool success confirms an in-memory edit, not a successful database save; the UI reports save status.
 Stop preserves completed file and database changes. Tool capability descriptions supersede README examples.
 

@@ -37,8 +37,8 @@ export const App = () => (
 A minimal React project with a Hello page and React Router.
 The entry is src/main.tsx. Add page routes in src/app.tsx.
 MemoryRouter keeps preview navigation separate from the editor URL.
-Use @gamma-compose/ui for built-in components. Project files save automatically
-in the browser; conversation history does not persist.
+Use @gamma-compose/ui for built-in components. Project files and completed chats
+save automatically in this browser.
 `,
   },
 }

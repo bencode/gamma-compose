@@ -1,76 +1,28 @@
 import * as Tabs from '@radix-ui/react-tabs'
 import { useState, useSyncExternalStore } from 'react'
-import {
-  Group,
-  type LayoutStorage,
-  Panel,
-  Separator,
-  useDefaultLayout,
-} from 'react-resizable-panels'
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { Link } from 'react-router-dom'
+import type { ProjectDatabase } from '../core/project/database'
 import type { ProjectCompileState } from '../core/project/records'
 import type { ProjectRepository } from '../core/project/repository'
 import type { ProjectStore } from '../core/project/store'
 import { ConversationPanel } from '../features/conversation/conversation-panel'
+import { SessionControls } from '../features/conversation/session-controls'
 import { useConversation } from '../features/conversation/use-conversation'
 import { useMessageAttachments } from '../features/conversation/use-message-attachments'
+import { useSessions } from '../features/conversation/use-sessions'
 import { RepositoryBrowser } from '../features/files/repository-browser'
 import { PreviewPanel } from '../features/preview/preview-panel'
 import { usePreview } from '../features/preview/use-preview'
-
-const desktopQuery = '(min-width: 900px)'
-const getDesktopSnapshot = () => window.matchMedia(desktopQuery).matches
-const subscribeDesktop = (notify: () => void) => {
-  const query = window.matchMedia(desktopQuery)
-  query.addEventListener('change', notify)
-  return () => query.removeEventListener('change', notify)
-}
-
-const isStorageUnavailable = (error: unknown) =>
-  error instanceof DOMException &&
-  (error.name === 'SecurityError' || error.name === 'QuotaExceededError')
-
-const desktopLayoutStorage: LayoutStorage = {
-  getItem(key) {
-    try {
-      const value = window.localStorage.getItem(key)
-      if (value === null) return null
-      const layout: unknown = JSON.parse(value)
-      if (
-        typeof layout === 'object' &&
-        layout !== null &&
-        !Array.isArray(layout) &&
-        Object.keys(layout).length === 2 &&
-        'conversation' in layout &&
-        'output' in layout &&
-        Object.values(layout).every(size => typeof size === 'number' && size >= 0 && size <= 100) &&
-        Math.abs(Number(layout.conversation) + Number(layout.output) - 100) < 0.01
-      )
-        return value
-      console.warn('Ignoring an invalid saved workbench layout.')
-      return null
-    } catch (error) {
-      if (!(error instanceof SyntaxError) && !isStorageUnavailable(error)) throw error
-      console.warn('Could not restore the workbench layout.', error)
-      return null
-    }
-  },
-  setItem(key, value) {
-    try {
-      window.localStorage.setItem(key, value)
-    } catch (error) {
-      if (!isStorageUnavailable(error)) throw error
-      console.warn('Could not save the workbench layout.', error)
-    }
-  },
-}
-
-const mobileLayoutStorage: LayoutStorage = {
-  getItem: () => null,
-  setItem: () => undefined,
-}
+import {
+  desktopLayoutStorage,
+  getDesktopSnapshot,
+  mobileLayoutStorage,
+  subscribeDesktop,
+} from './workbench-layout'
 
 type WorkbenchProps = {
+  database: ProjectDatabase
   projectId: string
   project: ProjectStore
   repository: ProjectRepository
@@ -85,6 +37,7 @@ type WorkbenchProps = {
 }
 
 export const Workbench = ({
+  database,
   projectId,
   project,
   repository,
@@ -96,7 +49,16 @@ export const Workbench = ({
 }: WorkbenchProps) => {
   const preview = usePreview(projectId, project, repository, compilePersistence)
   const attachments = useMessageAttachments(repository)
-  const conversation = useConversation(projectId, project, repository, attachments, preview)
+  const sessions = useSessions(database, projectId)
+  const conversation = useConversation(
+    projectId,
+    project,
+    repository,
+    attachments,
+    preview,
+    sessions,
+  )
+  const running = conversation.phase === 'running' || conversation.phase === 'stopping'
   const isDesktop = useSyncExternalStore(subscribeDesktop, getDesktopSnapshot)
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: 'gamma-compose-workbench-desktop',
@@ -143,6 +105,7 @@ export const Workbench = ({
                 >
                   ←
                 </Link>
+                <SessionControls sessions={sessions} running={running} />
                 <h1 className="min-w-0 truncate text-xs font-semibold" title={projectName}>
                   {projectName}
                 </h1>
@@ -163,6 +126,7 @@ export const Workbench = ({
               onRetrySave={onRetrySave}
               repository={repository}
               attachments={attachments}
+              sessions={sessions}
               onOpenRepositoryFile={path => {
                 setSelectedPath(path)
                 setView('repository')

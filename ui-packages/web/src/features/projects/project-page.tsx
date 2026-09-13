@@ -91,6 +91,7 @@ const ProjectSession = ({ id, onRetry }: { id: string; onRetry: () => void }) =>
   if (loaded)
     return (
       <Workbench
+        database={loaded.database}
         projectId={loaded.record.id}
         project={loaded.project}
         repository={loaded.repository}

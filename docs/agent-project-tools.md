@@ -11,11 +11,12 @@ creates one `ProjectStore` before mounting the workbench. Both the file browser
 and Agent tools use this store. Writes publish immutable snapshots; React subscribes
 through `useSyncExternalStore`. Template entries remain `src/main.tsx`.
 The store survives tab changes and responsive panel remounts. On refresh, a new
-store is created from the last saved snapshot, with a new conversation and preview.
+store is created from the last saved snapshot and the latest chat transcript is restored.
 
 `core/project/database.ts` owns the native IndexedDB `gamma-compose` database,
-version 3. The `templates`, `projects`, `compileStates`, `files`, and `contents`
-stores keep projects, compiled-tree metadata, and local repository files. Three
+version 4. The `templates`, `projects`, `compileStates`, `files`, `contents`,
+`sessions`, and `sessionTranscripts` stores keep projects, compiled-tree metadata,
+local repository files, chat metadata, and complete Pi transcripts. Three
 templates are inserted during initial database creation, never on normal reopening.
 Creating a project copies the selected template's files into an independent UUID
 record with a name and `updatedAt`. Opening an existing project never copies a template.
@@ -32,7 +33,9 @@ Saved. Save failures are logged and displayed with Retry save, while the in-memo
 files remain available. File tool success confirms the in-memory change, not storage
 durability. There is no unload-time flush guarantee: only committed data survives.
 Read failures and missing project IDs do not silently create replacement projects.
-Closing the workbench stops the Agent and compilation; chat and drafts are not saved.
+Completed Pi messages are saved after each `message_end`. Closing the workbench stops
+the Agent and compilation; the latest committed transcript returns on reopen. Drafts
+and currently selected attachments are not saved.
 
 Before publishing, the store validates canonical relative paths, file/directory
 collisions, the 1,024-file limit and the 16 MiB serialized UTF-8 project limit.
@@ -246,6 +249,6 @@ Run `pnpm check` and `pnpm build`. With a configured provider, ask for a real pa
 change, inspect the changed source, and test the resulting preview in the browser.
 This external acceptance test is not an Agent runtime-observation capability.
 
-Search, source diff UI, chat persistence, deletion/rename, shell commands, package
+Search, source diff UI, chat branching, project rename, shell commands, package
 installation, DOM inspection, automated interaction testing, a visible Console/Errors
 panel, and multiple compilation entries remain out of scope.

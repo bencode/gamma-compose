@@ -1,4 +1,4 @@
-import type { Agent, AgentEvent } from '@earendil-works/pi-agent-core'
+import type { Agent } from '@earendil-works/pi-agent-core'
 import { useEffect, useRef, useState } from 'react'
 import {
   type AgentPreview,
@@ -7,14 +7,15 @@ import {
 } from '../../core/agent/runtime'
 import type { ProjectRepository } from '../../core/project/repository'
 import type { ProjectStore } from '../../core/project/store'
+import { conversationSnapshot, updateToolStatus } from './conversation-agent-state'
 import {
   type ConversationItem,
   createConversationItems,
   createUserPrompt,
   type ToolExecutionState,
-  toolOutputText,
 } from './conversation-transcript'
 import type { MessageAttachments } from './use-message-attachments'
+import type { useSessions } from './use-sessions'
 
 export type ConversationPhase =
   | 'initializing'
@@ -23,44 +24,7 @@ export type ConversationPhase =
   | 'error'
   | 'running'
   | 'stopping'
-
-const conversationSnapshot = (
-  agent: Agent,
-  executions: ReadonlyMap<string, ToolExecutionState>,
-): ConversationItem[] => {
-  const toolLabels = new Map(agent.state.tools.map(tool => [tool.name, tool.label]))
-  return createConversationItems({
-    messages: agent.state.messages,
-    streamingMessage: agent.state.streamingMessage,
-    toolLabels,
-    executions,
-    running: agent.state.isStreaming,
-  })
-}
-
-const updateToolStatus = (
-  event: AgentEvent,
-  executions: Map<string, ToolExecutionState>,
-  signal: AbortSignal,
-) => {
-  if (event.type === 'tool_execution_start') executions.set(event.toolCallId, { status: 'Running' })
-  if (event.type === 'tool_execution_update') {
-    const output = toolOutputText(event.partialResult)
-    const previousOutput = executions.get(event.toolCallId)?.output
-    const nextOutput = output ?? previousOutput
-    executions.set(
-      event.toolCallId,
-      nextOutput === undefined ? { status: 'Running' } : { status: 'Running', output: nextOutput },
-    )
-  }
-  if (event.type === 'tool_execution_end') {
-    const output = toolOutputText(event.result)
-    executions.set(event.toolCallId, {
-      status: signal.aborted ? 'Stopped' : event.isError ? 'Failed' : 'Completed',
-      ...(output === undefined ? {} : { output }),
-    })
-  }
-}
+  | 'blocked'
 
 export const useConversation = (
   projectId: string,
@@ -68,6 +32,10 @@ export const useConversation = (
   repository: ProjectRepository,
   attachments: MessageAttachments,
   { compile, refresh, readErrors, readConsole }: AgentPreview,
+  sessions: Pick<
+    ReturnType<typeof useSessions>,
+    'initialSession' | 'loaded' | 'busy' | 'saveError' | 'ensureSession' | 'saveMessages'
+  >,
 ) => {
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState<ConversationItem[]>([])
@@ -75,11 +43,34 @@ export const useConversation = (
   const [error, setError] = useState<string>()
   const agentRef = useRef<Agent>(undefined)
   const busyRef = useRef(false)
+  const persistence = useRef(Promise.resolve())
+  const persistenceFailure = useRef<unknown>(undefined)
   const toolExecutions = useRef(new Map<string, ToolExecutionState>())
+  const clearAttachments = useRef(attachments.clearSelection)
+  clearAttachments.current = attachments.clearSelection
+  const sessionBlocked = !sessions.loaded || sessions.busy || Boolean(sessions.saveError)
 
   useEffect(() => {
+    const session = sessions.initialSession
+    if (!sessions.loaded || !session) return
     const controller = new AbortController()
     let unsubscribe: (() => void) | undefined
+    persistence.current = Promise.resolve()
+    persistenceFailure.current = undefined
+    toolExecutions.current.clear()
+    setDraft('')
+    clearAttachments.current()
+    setMessages(
+      createConversationItems({
+        messages: session.messages,
+        toolLabels: new Map(),
+        executions: toolExecutions.current,
+        running: false,
+      }),
+    )
+    setError(undefined)
+    setPhase('initializing')
+    busyRef.current = false
     const initialize = async () => {
       try {
         const config = await loadAgentConfig(controller.signal)
@@ -88,17 +79,33 @@ export const useConversation = (
           setPhase('unavailable')
           return
         }
-        const agent = createConversationAgent(config, projectId, project, repository, {
-          compile,
-          refresh,
-          readErrors,
-          readConsole,
-        })
+        const agent = createConversationAgent(
+          config,
+          projectId,
+          project,
+          repository,
+          {
+            compile,
+            refresh,
+            readErrors,
+            readConsole,
+          },
+          session,
+        )
         agentRef.current = agent
-        toolExecutions.current.clear()
+        setMessages(conversationSnapshot(agent, toolExecutions.current))
         unsubscribe = agent.subscribe((event, signal) => {
           updateToolStatus(event, toolExecutions.current, signal)
           setMessages(conversationSnapshot(agent, toolExecutions.current))
+          if (event.type !== 'message_end') return
+          const snapshot = structuredClone(agent.state.messages)
+          persistence.current = persistence.current
+            .then(() => sessions.saveMessages(snapshot))
+            .catch(cause => {
+              persistenceFailure.current = cause
+              console.error('Stopping Agent because chat could not be saved.', cause)
+              agent.abort()
+            })
         })
         setPhase('ready')
       } catch (cause) {
@@ -114,20 +121,36 @@ export const useConversation = (
       agentRef.current?.abort()
       agentRef.current = undefined
     }
-  }, [projectId, project, repository, compile, refresh, readErrors, readConsole])
+  }, [
+    projectId,
+    project,
+    repository,
+    compile,
+    refresh,
+    readErrors,
+    readConsole,
+    sessions.initialSession,
+    sessions.loaded,
+    sessions.saveMessages,
+  ])
 
   const send = async () => {
     const agent = agentRef.current
     const text = draft.trim()
     const attachedPaths = attachments.selectedPaths
-    if (!agent || busyRef.current || (!text && !attachedPaths.length)) return
+    if (!agent || busyRef.current || sessionBlocked || (!text && !attachedPaths.length)) return
     busyRef.current = true
     setPhase('running')
     setError(undefined)
-    setDraft('')
-    attachments.clearSelection()
+    persistenceFailure.current = undefined
     try {
+      await sessions.ensureSession(text)
+      if (agentRef.current !== agent) return
+      setDraft('')
+      attachments.clearSelection()
       await agent.prompt(createUserPrompt(text, attachedPaths))
+      await persistence.current
+      if (persistenceFailure.current) throw persistenceFailure.current
     } catch (cause) {
       if (agentRef.current === agent) {
         setError(cause instanceof Error ? cause.message : 'Could not send the message.')
@@ -155,5 +178,13 @@ export const useConversation = (
     agentRef.current?.abort()
   }
 
-  return { draft, setDraft, messages, phase, error, send, stop }
+  return {
+    draft,
+    setDraft,
+    messages,
+    phase: phase === 'ready' && sessionBlocked ? ('blocked' as const) : phase,
+    error,
+    send,
+    stop,
+  }
 }
