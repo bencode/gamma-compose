@@ -19,6 +19,11 @@ stores keep projects, compiled-tree metadata, and local repository files. Three
 templates are inserted during initial database creation, never on normal reopening.
 Creating a project copies the selected template's files into an independent UUID
 record with a name and `updatedAt`. Opening an existing project never copies a template.
+Deleting a project from the gallery removes its source record, compiled-tree metadata,
+repository metadata and shared Blob contents in one project-database transaction. It
+also deletes the project's separate local application database. Server-side compiled
+artifacts are derived data and remain subject to server retention rather than browser
+deletion.
 
 The project page subscribes to valid file changes and immediately submits a whole
 snapshot transaction. Transactions complete in submission order; no debounce or

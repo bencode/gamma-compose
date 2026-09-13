@@ -118,6 +118,42 @@ describe('gallery and project navigation', () => {
     expect(screen.getByRole('textbox', { name: 'src/app.tsx' })).not.toHaveValue(updated)
   })
 
+  it('confirms project deletion, supports cancellation and shows the empty state', async () => {
+    const user = userEvent.setup()
+    const database = await openProjectDatabase()
+    const first = await database.createProject('blank')
+    const second = await database.createProject('blank')
+    await database.saveProject({ ...first, name: 'First project' })
+    await database.saveProject({ ...second, name: 'Second project' })
+    database.close()
+    render(<App />)
+    const projects = await screen.findByRole('region', { name: 'My projects' })
+
+    await user.click(within(projects).getByRole('button', { name: 'Delete First project' }))
+    await user.click(
+      within(projects).getByRole('button', { name: 'Cancel deleting First project' }),
+    )
+    expect(within(projects).getByRole('link', { name: /First project/ })).toBeInTheDocument()
+
+    await user.click(within(projects).getByRole('button', { name: 'Delete First project' }))
+    await user.click(within(projects).getByRole('button', { name: 'Confirm delete First project' }))
+    await waitFor(() =>
+      expect(within(projects).queryByRole('link', { name: /First project/ })).toBeNull(),
+    )
+    expect(within(projects).getByRole('link', { name: /Second project/ })).toBeInTheDocument()
+
+    await user.click(within(projects).getByRole('button', { name: 'Delete Second project' }))
+    await user.click(
+      within(projects).getByRole('button', { name: 'Confirm delete Second project' }),
+    )
+    expect(
+      await within(projects).findByText('Nothing here yet. Start with a template above.'),
+    ).toBeInTheDocument()
+    const reopened = await openProjectDatabase()
+    expect(await reopened.listProjects()).toEqual([])
+    reopened.close()
+  })
+
   it('reopens saved files at the size limit without counting project metadata', async () => {
     const database = await openProjectDatabase()
     const project = await database.createProject('blank')

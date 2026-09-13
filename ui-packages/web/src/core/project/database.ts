@@ -1,5 +1,10 @@
+import { deleteLocalDb } from '@gamma-compose/local-db'
 import type { Project, ProjectCompileState, Template } from './records'
-import type { StoredFileContent, StoredFileMetadata } from './repository-files'
+import {
+  type StoredFileContent,
+  type StoredFileMetadata,
+  storedFileContentId,
+} from './repository-files'
 import { createProjectStore } from './store'
 import { templates } from './templates'
 
@@ -93,6 +98,26 @@ const projectDatabase = (db: IDBDatabase) => {
     if (contentId) transaction.objectStore('contents').delete(contentId)
     await transactionCompleted(transaction)
   }
+  const deleteProject = async (projectId: string): Promise<void> => {
+    await deleteLocalDb(`project:${projectId}`)
+    const transaction = db.transaction(
+      ['projects', 'compileStates', 'files', 'contents'],
+      'readwrite',
+    )
+    const storedFiles = transaction.objectStore('files').index('by-project-id').getAll(projectId)
+    storedFiles.onsuccess = () => {
+      const files = storedFiles.result as StoredFileMetadata[]
+      files.forEach(file => {
+        transaction.objectStore('files').delete(file.id)
+      })
+      new Set(files.map(storedFileContentId)).forEach(contentId => {
+        transaction.objectStore('contents').delete(contentId)
+      })
+    }
+    transaction.objectStore('projects').delete(projectId)
+    transaction.objectStore('compileStates').delete(projectId)
+    await transactionCompleted(transaction)
+  }
   return {
     close: () => db.close(),
     getProject,
@@ -104,6 +129,7 @@ const projectDatabase = (db: IDBDatabase) => {
     saveStoredFiles,
     saveStoredFileMetadata,
     deleteStoredFile,
+    deleteProject,
     listTemplates: async (): Promise<Template[]> => {
       const transaction = db.transaction('templates', 'readonly')
       const stored: Template[] = await completed(

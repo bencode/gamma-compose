@@ -1,6 +1,7 @@
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  deleteLocalDb,
   type JsonValue,
   type LocalDb,
   LocalDbError,
@@ -53,6 +54,23 @@ afterEach(() => {
 })
 
 describe('local database', () => {
+  it('deletes one logical database and allows idempotent retries', async () => {
+    const db = await open()
+    await db.create('tasks', { title: 'Delete me', status: 'todo' })
+
+    await deleteLocalDb('test')
+    const reopened = await open()
+    expect((await reopened.list('tasks')).total).toBe(0)
+    await deleteLocalDb('test')
+    vi.spyOn(indexedDB, 'deleteDatabase').mockImplementationOnce(() => {
+      throw new DOMException('Storage disabled', 'SecurityError')
+    })
+    await expect(deleteLocalDb('unavailable')).rejects.toMatchObject({
+      code: 'STORAGE_UNAVAILABLE',
+    })
+    await expect(deleteLocalDb('')).rejects.toMatchObject({ code: 'INVALID_MODEL' })
+  })
+
   it('persists CRUD results, replaces nested values and isolates databases and resources', async () => {
     const resources = [tasks, { ...tasks, name: 'notes' }]
     const db = await open(resources)

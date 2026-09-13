@@ -1,3 +1,4 @@
+import { openLocalDb } from '@gamma-compose/local-db'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openProjectDatabase, type ProjectDatabase } from './database'
@@ -179,5 +180,85 @@ describe('local projects', () => {
     expect(await database.getStoredFileContent('shared-content')).toBeDefined()
     await database.deleteStoredFile(copy.id, 'shared-content')
     expect(await database.getStoredFileContent('shared-content')).toBeUndefined()
+  })
+
+  it('deletes a project with its compiled state, repository contents and application database', async () => {
+    const database = await open()
+    const first = await database.createProject('blank')
+    const second = await database.createProject('blank')
+    const compileState = (projectId: string) => ({
+      projectId,
+      updatedAt: 1,
+      build: {
+        projectId,
+        buildId: projectId === first.id ? 'a'.repeat(64) : 'b'.repeat(64),
+        compilerVersion: '5',
+        entry: 'src/main.tsx',
+        files: {},
+        previewUrl: `/__preview/projects/${projectId}/builds/current/index.html`,
+      },
+    })
+    await database.saveCompileState(compileState(first.id))
+    await database.saveCompileState(compileState(second.id))
+    const firstFile = {
+      id: 'first-file',
+      contentId: 'first-content',
+      projectId: first.id,
+      path: 'attachments/reference.png',
+      mediaType: 'image/png',
+      size: 5,
+      createdAt: 1,
+      updatedAt: 1,
+      revision: 1,
+    }
+    const firstCopy = {
+      ...firstFile,
+      id: 'first-copy',
+      path: 'src/assets/reference.png',
+    }
+    const secondFile = {
+      ...firstFile,
+      id: 'second-file',
+      contentId: 'second-content',
+      projectId: second.id,
+    }
+    await database.saveStoredFiles([
+      { metadata: firstFile, blob: new Blob(['first']) },
+      { metadata: secondFile, blob: new Blob(['second']) },
+    ])
+    await database.saveStoredFileMetadata(firstCopy)
+    const resource = {
+      protocolVersion: 1,
+      name: 'items',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title'],
+        properties: { id: { type: 'string' }, title: { type: 'string' } },
+      },
+    }
+    const application = await openLocalDb({
+      databaseName: `project:${first.id}`,
+      resources: [resource],
+    })
+    await application.create('items', { title: 'Private project data' })
+
+    await database.deleteProject(first.id)
+    await database.deleteProject(first.id)
+
+    expect(await database.getProject(first.id)).toBeUndefined()
+    expect(await database.getCompileState(first.id)).toBeUndefined()
+    expect(await database.listStoredFiles(first.id)).toEqual([])
+    expect(await database.getStoredFileContent('first-content')).toBeUndefined()
+    expect(await database.getProject(second.id)).toEqual(second)
+    expect(await database.getCompileState(second.id)).toEqual(compileState(second.id))
+    expect(await database.listStoredFiles(second.id)).toEqual([secondFile])
+    expect(await database.getStoredFileContent('second-content')).toBeDefined()
+    const reopened = await openLocalDb({
+      databaseName: `project:${first.id}`,
+      resources: [resource],
+    })
+    expect((await reopened.list('items')).total).toBe(0)
+    reopened.close()
   })
 })
