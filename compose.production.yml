@@ -1,0 +1,34 @@
+name: gamma-compose
+
+services:
+  compose:
+    image: gamma-compose:${GAMMA_COMPOSE_TAG:-latest}
+    build:
+      context: .
+      target: runtime
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3303
+      GAMMA_DATA_DIR: /app/data
+      GLM_API_KEY: ${GLM_API_KEY:?GLM_API_KEY is required}
+      GLM_MODEL: ${GLM_MODEL:-glm-5.3}
+    ports:
+      - "172.17.0.1:3303:3303"
+    volumes:
+      - gamma-compose-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3303/api/health').then(response => process.exit(response.ok ? 0 : 1)).catch(error => { console.error(error); process.exit(1) })
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  gamma-compose-data:
