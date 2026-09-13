@@ -1,12 +1,15 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { IDBFactory } from 'fake-indexeddb'
 import { StrictMode, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { openProjectDatabase, type ProjectDatabase } from '../../core/project/database'
 import { demoProject } from '../../core/project/demo-project'
 import { createProjectRepository } from '../../core/project/repository'
 import { createProjectStore } from '../../core/project/store'
 import { ConversationPanel } from './conversation-panel'
 import { useConversation } from './use-conversation'
 import { prepareClipboardFiles, useMessageAttachments } from './use-message-attachments'
+import { useSessions } from './use-sessions'
 
 const compile = async () => ({
   ok: true as const,
@@ -27,6 +30,8 @@ const preview = {
   readErrors: () => ({ buildId: 1, status: 'ready' as const, errors: [], dropped: 0 }),
   readConsole: () => ({ buildId: 1, entries: [], dropped: 0 }),
 }
+let database: ProjectDatabase
+let projectId: string
 const ConnectedConversation = () => {
   const [project] = useState(() => createProjectStore(demoProject))
   const [repository] = useState(() =>
@@ -38,13 +43,15 @@ const ConnectedConversation = () => {
     ),
   )
   const attachments = useMessageAttachments(repository)
+  const sessions = useSessions(database, projectId)
   return (
     <ConversationPanel
-      {...useConversation('test-project', project, repository, attachments, preview)}
+      {...useConversation(projectId, project, repository, attachments, preview, sessions)}
       saveStatus="saved"
       onRetrySave={() => undefined}
       repository={repository}
       attachments={attachments}
+      sessions={sessions}
       onOpenRepositoryFile={() => undefined}
     />
   )
@@ -56,7 +63,10 @@ const event = (delta: Record<string, unknown>, finishReason: string | null = nul
 let streams: ReadableStreamDefaultController<Uint8Array>[]
 let signals: AbortSignal[]
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.stubGlobal('indexedDB', new IDBFactory())
+  database = await openProjectDatabase()
+  projectId = (await database.createProject('blank')).id
   streams = []
   signals = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -80,13 +90,17 @@ beforeEach(() => {
     )
   })
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  database.close()
+  vi.restoreAllMocks()
+})
 
 const sendMessage = async (text: string) => {
-  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: text } })
-  const send = screen.getByRole('button', { name: 'Send' })
-  await waitFor(() => expect(send).toBeEnabled())
-  fireEvent.click(send)
+  const input = screen.getByRole('textbox', { name: 'Message' })
+  await waitFor(() => expect(input).toBeEnabled())
+  fireEvent.change(input, { target: { value: text } })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 }
 
 describe('conversation', () => {
@@ -371,6 +385,7 @@ describe('conversation', () => {
   it('does not send on Shift+Enter or IME confirmation and aborts on unmount', async () => {
     const view = render(<ConnectedConversation />)
     const input = screen.getByRole('textbox', { name: 'Message' })
+    await waitFor(() => expect(input).toBeEnabled())
     fireEvent.change(input, { target: { value: '你好' } })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })

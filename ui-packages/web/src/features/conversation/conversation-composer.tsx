@@ -2,10 +2,11 @@ import { ArrowUp, Paperclip, Square } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { ProjectRepository } from '../../core/project/repository'
 import { MessageAttachmentList } from './message-attachments'
+import { ProjectPersistenceStatus, type ProjectSaveStatus } from './project-persistence-status'
+import { SessionPersistenceStatus } from './session-persistence-status'
 import type { ConversationPhase } from './use-conversation'
 import type { MessageAttachments } from './use-message-attachments'
-
-type SaveStatus = 'saving' | 'saved' | 'error'
+import type { useSessions } from './use-sessions'
 
 type ConversationComposerProps = {
   draft: string
@@ -14,7 +15,8 @@ type ConversationComposerProps = {
   error?: string
   repository: ProjectRepository
   attachments: MessageAttachments
-  saveStatus: SaveStatus
+  sessions: ReturnType<typeof useSessions>
+  saveStatus: ProjectSaveStatus
   saveError?: string
   setDraft: (draft: string) => void
   send: () => Promise<void>
@@ -28,36 +30,6 @@ const resizeTextarea = (textarea: HTMLTextAreaElement) => {
   textarea.style.overflowY = textarea.scrollHeight > 192 ? 'auto' : 'hidden'
 }
 
-const PersistenceStatus = ({
-  status,
-  error,
-  onRetry,
-}: {
-  status: SaveStatus
-  error?: string
-  onRetry: () => void
-}) => {
-  if (status === 'error')
-    return (
-      <button
-        type="button"
-        className="persistence-status persistence-status-error"
-        title={error}
-        aria-label="Save failed. Retry save"
-        onClick={onRetry}
-      >
-        <span className="persistence-error-prefix">Save failed · </span>Retry
-      </button>
-    )
-  if (status === 'saving')
-    return (
-      <span className="persistence-status" role="status">
-        Saving…
-      </span>
-    )
-  return null
-}
-
 export const ConversationComposer = ({
   draft,
   phase,
@@ -65,6 +37,7 @@ export const ConversationComposer = ({
   error,
   repository,
   attachments,
+  sessions,
   saveStatus,
   saveError,
   setDraft,
@@ -76,7 +49,8 @@ export const ConversationComposer = ({
   const fileInput = useRef<HTMLInputElement>(null)
   const [draggingFiles, setDraggingFiles] = useState(false)
   const running = phase === 'running' || phase === 'stopping'
-  const inputDisabled = phase === 'initializing' || phase === 'unavailable' || phase === 'error'
+  const inputDisabled =
+    phase === 'initializing' || phase === 'unavailable' || phase === 'error' || phase === 'blocked'
 
   useLayoutEffect(() => {
     const current = textarea.current
@@ -162,7 +136,8 @@ export const ConversationComposer = ({
         )}
         <div className="composer-actions">
           <div className="composer-context">
-            <PersistenceStatus status={saveStatus} error={saveError} onRetry={onRetrySave} />
+            <SessionPersistenceStatus sessions={sessions} running={running} />
+            <ProjectPersistenceStatus status={saveStatus} error={saveError} onRetry={onRetrySave} />
             <input
               ref={fileInput}
               className="sr-only"

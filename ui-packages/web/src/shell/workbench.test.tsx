@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { IDBFactory } from 'fake-indexeddb'
 import { useState } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { openProjectDatabase, type ProjectDatabase } from '../core/project/database'
 import { demoProject } from '../core/project/demo-project'
 import { createProjectRepository } from '../core/project/repository'
 import { createProjectStore } from '../core/project/store'
@@ -27,6 +29,8 @@ type TestWorkbenchProps = {
   attachment?: 'source' | 'stored'
   deleteStoredFile?: (id: string) => Promise<void>
 }
+
+let database: ProjectDatabase
 
 const Workbench = ({
   attachment,
@@ -66,6 +70,7 @@ const Workbench = ({
   return (
     <MemoryRouter>
       <WorkbenchView
+        database={database}
         projectId="test-project"
         project={project}
         repository={repository}
@@ -78,7 +83,15 @@ const Workbench = ({
   )
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.stubGlobal('indexedDB', new IDBFactory())
+  database = await openProjectDatabase()
+  await database.saveProject({
+    id: 'test-project',
+    name: 'Team workspace',
+    updatedAt: Date.now(),
+    ...demoProject,
+  })
   vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
     const url = String(input)
     if (url === '/api/agent/config') return Response.json({ enabled: false })
@@ -86,7 +99,10 @@ beforeEach(() => {
     return Response.json(compiled())
   })
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  database.close()
+  vi.restoreAllMocks()
+})
 
 describe('desktop layout persistence', () => {
   const storageKey = 'react-resizable-panels:gamma-compose-workbench-desktop'
@@ -224,7 +240,9 @@ describe('workbench', () => {
     })
     render(<Workbench />)
     const frame = await screen.findByTitle('Project preview')
-    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+    const message = screen.getByRole('textbox', { name: 'Message' })
+    await waitFor(() => expect(message).toBeEnabled())
+    fireEvent.change(message, {
       target: { value: 'Update the page' },
     })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
@@ -425,7 +443,9 @@ describe('workbench', () => {
       return Response.json(compiled())
     })
     render(<Workbench />)
-    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+    const message = screen.getByRole('textbox', { name: 'Message' })
+    await waitFor(() => expect(message).toBeEnabled())
+    fireEvent.change(message, {
       target: { value: 'Build a page' },
     })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())

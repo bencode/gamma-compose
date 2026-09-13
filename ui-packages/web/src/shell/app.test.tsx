@@ -64,17 +64,29 @@ const configureWriter = (contents: string[]) => {
 }
 
 const sendChange = async () => {
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled())
-  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+  const input = screen.getByRole('textbox', { name: 'Message' })
+  await waitFor(() => expect(input).toBeEnabled())
+  fireEvent.change(input, {
     target: { value: 'Update the page' },
   })
   await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   await screen.findByText('Done.')
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull())
+}
+
+const sendText = async (text: string) => {
+  const input = screen.getByRole('textbox', { name: 'Message' })
+  await waitFor(() => expect(input).toBeEnabled())
+  fireEvent.change(input, { target: { value: text } })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await screen.findByText('Done.')
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull())
 }
 
 describe('gallery and project navigation', () => {
-  it('creates from a template, saves Agent writes, and reopens without chat or cross-project changes', async () => {
+  it('creates from a template, restores its chat and files, and isolates another project', async () => {
     const user = userEvent.setup()
     const updated = 'export const App = () => <h1>Saved change</h1>'
     configureWriter(['export const App = () => <h1>First change</h1>', updated])
@@ -101,7 +113,9 @@ describe('gallery and project navigation', () => {
 
     render(<App />)
     await screen.findByTitle('Project preview')
-    expect(screen.getByRole('region', { name: 'Conversation' })).toBeEmptyDOMElement()
+    const conversation = screen.getByRole('region', { name: 'Conversation' })
+    await waitFor(() => expect(conversation).toHaveTextContent('Update the page'))
+    expect(conversation).toHaveTextContent('Done.')
     await user.click(screen.getByRole('tab', { name: 'Repository' }))
     expect(await screen.findByRole('textbox', { name: 'src/app.tsx' })).toHaveTextContent(updated)
     await user.click(screen.getByRole('link', { name: 'Back to gallery' }))
@@ -130,13 +144,18 @@ describe('gallery and project navigation', () => {
     const projects = await screen.findByRole('region', { name: 'My projects' })
 
     await user.click(within(projects).getByRole('button', { name: 'Delete First project' }))
-    await user.click(
-      within(projects).getByRole('button', { name: 'Cancel deleting First project' }),
-    )
+    const firstDialog = screen.getByRole('dialog', { name: 'Delete project?' })
+    expect(firstDialog).toHaveTextContent('First project')
+    expect(firstDialog).toHaveTextContent('files, chats, app data, and preview state')
+    await user.click(within(firstDialog).getByRole('button', { name: 'Cancel' }))
     expect(within(projects).getByRole('link', { name: /First project/ })).toBeInTheDocument()
 
     await user.click(within(projects).getByRole('button', { name: 'Delete First project' }))
-    await user.click(within(projects).getByRole('button', { name: 'Confirm delete First project' }))
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Delete project?' })).getByRole('button', {
+        name: 'Delete project',
+      }),
+    )
     await waitFor(() =>
       expect(within(projects).queryByRole('link', { name: /First project/ })).toBeNull(),
     )
@@ -144,13 +163,56 @@ describe('gallery and project navigation', () => {
 
     await user.click(within(projects).getByRole('button', { name: 'Delete Second project' }))
     await user.click(
-      within(projects).getByRole('button', { name: 'Confirm delete Second project' }),
+      within(screen.getByRole('dialog', { name: 'Delete project?' })).getByRole('button', {
+        name: 'Delete project',
+      }),
     )
     expect(
       await within(projects).findByText('Nothing here yet. Start with a template above.'),
     ).toBeInTheDocument()
     const reopened = await openProjectDatabase()
     expect(await reopened.listProjects()).toEqual([])
+    reopened.close()
+  })
+
+  it('creates, switches, and deletes independent chats for one project', async () => {
+    const user = userEvent.setup()
+    configureWriter([])
+    const database = await openProjectDatabase()
+    const project = await database.createProject('blank')
+    database.close()
+    window.history.replaceState(null, '', `/projects/${project.id}`)
+    render(<App />)
+    await screen.findByTitle('Project preview')
+
+    await sendText('First idea')
+    await user.click(screen.getByRole('button', { name: 'Chats' }))
+    const chats = screen.getByRole('dialog', { name: 'Chats' })
+    await user.click(within(chats).getByRole('button', { name: 'New chat' }))
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Conversation' })).toBeEmptyDOMElement(),
+    )
+    await sendText('Second idea')
+
+    await user.click(screen.getByRole('button', { name: 'Chats' }))
+    await user.click(within(chats).getByRole('button', { name: 'First idea' }))
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Conversation' })).toHaveTextContent('First idea'),
+    )
+    expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent(
+      'Second idea',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Chats' }))
+    await user.click(within(chats).getByRole('button', { name: 'Delete chat: Second idea' }))
+    await user.click(within(chats).getByRole('button', { name: 'Delete chat' }))
+    await waitFor(() =>
+      expect(within(chats).queryByRole('button', { name: 'Second idea' })).toBeNull(),
+    )
+    const reopened = await openProjectDatabase()
+    expect((await reopened.listChatSessions(project.id)).map(session => session.title)).toEqual([
+      'First idea',
+    ])
     reopened.close()
   })
 
@@ -187,8 +249,18 @@ describe('gallery and project navigation', () => {
     const warning = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     render(<App />)
     await screen.findByTitle('Project preview')
-    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementationOnce(() => {
-      throw new DOMException('Storage full', 'QuotaExceededError')
+    const originalPut = IDBObjectStore.prototype.put
+    let failed = false
+    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function put(
+      this: IDBObjectStore,
+      value,
+      key,
+    ) {
+      if (this.name === 'projects' && !failed) {
+        failed = true
+        throw new DOMException('Storage full', 'QuotaExceededError')
+      }
+      return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key)
     })
     await sendChange()
     expect(
@@ -201,6 +273,48 @@ describe('gallery and project navigation', () => {
       expect((await database.getProject(project.id))?.files['src/app.tsx']).toContain('Retry me'),
     )
     database.close()
+  })
+
+  it('blocks chat after a transcript write failure and retries before sending', async () => {
+    const user = userEvent.setup()
+    configureWriter([])
+    const database = await openProjectDatabase()
+    const project = await database.createProject('blank')
+    database.close()
+    window.history.replaceState(null, '', `/projects/${project.id}`)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    render(<App />)
+    await screen.findByTitle('Project preview')
+    const originalPut = IDBObjectStore.prototype.put
+    let failed = false
+    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function put(
+      this: IDBObjectStore,
+      value,
+      key,
+    ) {
+      if (this.name === 'sessions' && !failed) {
+        failed = true
+        throw new DOMException('Storage full', 'QuotaExceededError')
+      }
+      return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key)
+    })
+
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    await waitFor(() => expect(input).toBeEnabled())
+    fireEvent.change(input, { target: { value: 'Keep this request' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const retry = await screen.findByRole('button', { name: 'Chat save failed · Retry' })
+    expect(input).toBeDisabled()
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/chat/completions')),
+    ).toHaveLength(0)
+    expect(error).toHaveBeenCalled()
+
+    await user.click(retry)
+    await waitFor(() => expect(input).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('Done.')
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull())
   })
 
   it('reports a missing local project without creating a replacement', async () => {

@@ -4,6 +4,7 @@ import { zaiCodingCnProvider } from '@earendil-works/pi-ai/providers/zai-coding-
 import type { AgentConfig } from '@gamma-compose/server/agent-contract'
 import type { ProjectRepository } from '../project/repository'
 import type { ProjectStore } from '../project/store'
+import type { ChatSession } from '../session/records'
 import { createAnalyzeImageTool } from './analyze-image-tool'
 import { builtInSkillFiles, builtInSkills } from './builtin-skills'
 import { type CompileProject, createCompileTool } from './compile-tool'
@@ -31,6 +32,7 @@ export const createConversationAgent = (
   project: ProjectStore,
   repository: ProjectRepository,
   preview: AgentPreview,
+  session: Pick<ChatSession, 'id' | 'messages'>,
 ) => {
   const models = createModels()
   models.setProvider(zaiCodingCnProvider())
@@ -39,8 +41,10 @@ export const createConversationAgent = (
 
   const env = createProjectEnv(repository, builtInSkillFiles)
   return new Agent({
+    sessionId: session.id,
     toolExecution: 'sequential',
     initialState: {
+      messages: structuredClone(session.messages),
       model: { ...model, baseUrl: new URL('/api/agent', window.location.origin).href },
       systemPrompt: createSystemPrompt(builtInSkills),
       thinkingLevel: 'low',

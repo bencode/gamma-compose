@@ -1,5 +1,8 @@
 import { deleteLocalDb } from '@gamma-compose/local-db'
-import type { Project, ProjectCompileState, Template } from './records'
+import { createChatDatabase, deleteProjectChats } from '../session/database'
+import { configureSessionStores } from '../session/database-upgrade'
+import { createCatalogDatabase } from './catalog-database'
+import type { Project, ProjectCompileState } from './records'
 import {
   type StoredFileContent,
   type StoredFileMetadata,
@@ -27,6 +30,7 @@ const transactionCompleted = (transaction: IDBTransaction): Promise<void> =>
   })
 
 const projectDatabase = (db: IDBDatabase) => {
+  const chatDatabase = createChatDatabase(db)
   const getProject = async (id: string): Promise<Project | undefined> => {
     const transaction = db.transaction('projects', 'readonly')
     const project: Project | undefined = await completed(
@@ -41,6 +45,7 @@ const projectDatabase = (db: IDBDatabase) => {
     const transaction = db.transaction('projects', 'readwrite')
     await completed(transaction, transaction.objectStore('projects').put(project))
   }
+  const catalogDatabase = createCatalogDatabase(db, saveProject)
   const getCompileState = async (projectId: string): Promise<ProjectCompileState | undefined> => {
     const transaction = db.transaction('compileStates', 'readonly')
     return completed(transaction, transaction.objectStore('compileStates').get(projectId))
@@ -101,7 +106,7 @@ const projectDatabase = (db: IDBDatabase) => {
   const deleteProject = async (projectId: string): Promise<void> => {
     await deleteLocalDb(`project:${projectId}`)
     const transaction = db.transaction(
-      ['projects', 'compileStates', 'files', 'contents'],
+      ['projects', 'compileStates', 'files', 'contents', 'sessions', 'sessionTranscripts'],
       'readwrite',
     )
     const storedFiles = transaction.objectStore('files').index('by-project-id').getAll(projectId)
@@ -114,6 +119,7 @@ const projectDatabase = (db: IDBDatabase) => {
         transaction.objectStore('contents').delete(contentId)
       })
     }
+    deleteProjectChats(transaction, projectId)
     transaction.objectStore('projects').delete(projectId)
     transaction.objectStore('compileStates').delete(projectId)
     await transactionCompleted(transaction)
@@ -122,6 +128,7 @@ const projectDatabase = (db: IDBDatabase) => {
     close: () => db.close(),
     getProject,
     saveProject,
+    ...chatDatabase,
     getCompileState,
     saveCompileState,
     listStoredFiles,
@@ -130,39 +137,7 @@ const projectDatabase = (db: IDBDatabase) => {
     saveStoredFileMetadata,
     deleteStoredFile,
     deleteProject,
-    listTemplates: async (): Promise<Template[]> => {
-      const transaction = db.transaction('templates', 'readonly')
-      const stored: Template[] = await completed(
-        transaction,
-        transaction.objectStore('templates').getAll(),
-      )
-      return templates.flatMap(template => stored.filter(item => item.id === template.id))
-    },
-    listProjects: async (): Promise<Project[]> => {
-      const transaction = db.transaction('projects', 'readonly')
-      const projects: Project[] = await completed(
-        transaction,
-        transaction.objectStore('projects').getAll(),
-      )
-      return projects.sort((left, right) => right.updatedAt - left.updatedAt)
-    },
-    createProject: async (templateId: string): Promise<Project> => {
-      const transaction = db.transaction('templates', 'readonly')
-      const template: Template | undefined = await completed(
-        transaction,
-        transaction.objectStore('templates').get(templateId),
-      )
-      if (!template) throw new Error('Template not found.')
-      const project: Project = {
-        id: crypto.randomUUID(),
-        name: template.name,
-        updatedAt: Date.now(),
-        entry: template.entry,
-        files: { ...template.files },
-      }
-      await saveProject(project)
-      return project
-    },
+    ...catalogDatabase,
   }
 }
 
@@ -170,7 +145,7 @@ export type ProjectDatabase = ReturnType<typeof projectDatabase>
 
 export const openProjectDatabase = (): Promise<ProjectDatabase> =>
   new Promise((resolve, reject) => {
-    const request = indexedDB.open('gamma-compose', 3)
+    const request = indexedDB.open('gamma-compose', 4)
     let blocked = false
     request.onupgradeneeded = event => {
       const db = request.result
@@ -188,6 +163,7 @@ export const openProjectDatabase = (): Promise<ProjectDatabase> =>
         files.createIndex('by-project-path', ['projectId', 'path'], { unique: true })
         db.createObjectStore('contents', { keyPath: 'id' })
       }
+      if (event.oldVersion < 4) configureSessionStores(db, request.transaction as IDBTransaction)
     }
     request.onerror = () =>
       reject(request.error ?? new Error('Could not open the project database.'))
