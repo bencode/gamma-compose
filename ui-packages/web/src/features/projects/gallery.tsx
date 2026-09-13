@@ -1,3 +1,4 @@
+import { Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { openProjectDatabase, type ProjectDatabase } from '../../core/project/database'
@@ -7,9 +8,13 @@ const GalleryContent = ({ onRetry }: { onRetry: () => void }) => {
   const navigate = useNavigate()
   const database = useRef<ProjectDatabase | undefined>(undefined)
   const creatingRef = useRef(false)
+  const deletingRef = useRef(false)
   const [catalog, setCatalog] = useState<{ templates: Template[]; projects: Project[] }>()
   const [error, setError] = useState<string>()
   const [creating, setCreating] = useState<string>()
+  const [pendingDelete, setPendingDelete] = useState<string>()
+  const [deleting, setDeleting] = useState<string>()
+  const [deleteError, setDeleteError] = useState<{ id: string; message: string }>()
 
   useEffect(() => {
     let active = true
@@ -69,6 +74,38 @@ const GalleryContent = ({ onRetry }: { onRetry: () => void }) => {
     } finally {
       creatingRef.current = false
       if (database.current === connection) setCreating(undefined)
+    }
+  }
+
+  const deleteProject = async (project: Project) => {
+    const connection = database.current
+    if (!connection || deletingRef.current) return
+    deletingRef.current = true
+    setDeleting(project.id)
+    setDeleteError(undefined)
+    try {
+      await connection.deleteProject(project.id)
+      if (database.current === connection) {
+        setCatalog(current =>
+          current
+            ? { ...current, projects: current.projects.filter(item => item.id !== project.id) }
+            : current,
+        )
+        setPendingDelete(undefined)
+      }
+    } catch (cause) {
+      console.error(`Could not delete project: ${project.id}`, cause)
+      if (database.current === connection)
+        setDeleteError({
+          id: project.id,
+          message:
+            cause instanceof Error || cause instanceof DOMException
+              ? cause.message
+              : 'Could not delete this project.',
+        })
+    } finally {
+      deletingRef.current = false
+      if (database.current === connection) setDeleting(undefined)
     }
   }
 
@@ -165,24 +202,73 @@ const GalleryContent = ({ onRetry }: { onRetry: () => void }) => {
                 <ul className="divide-y divide-line border-y border-line">
                   {catalog.projects.map(project => (
                     <li key={project.id}>
-                      <Link
-                        to={`/projects/${project.id}`}
-                        className="flex items-center justify-between gap-4 px-2 py-5 hover:bg-workspace"
-                      >
-                        <div className="min-w-0">
-                          <h3 className="truncate font-medium">{project.name}</h3>
-                          <p className="mt-1 text-xs text-muted">
-                            Edited{' '}
-                            {new Date(project.updatedAt).toLocaleString('en', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short',
-                            })}
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-sm text-accent">
-                          Open <span aria-hidden="true">↗</span>
-                        </span>
-                      </Link>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Link
+                          to={`/projects/${project.id}`}
+                          className="flex min-w-0 flex-1 items-center justify-between gap-4 px-2 py-5 hover:bg-workspace"
+                        >
+                          <div className="min-w-0">
+                            <h3 className="truncate font-medium">{project.name}</h3>
+                            <p className="mt-1 text-xs text-muted">
+                              Edited{' '}
+                              {new Date(project.updatedAt).toLocaleString('en', {
+                                dateStyle: 'medium',
+                                timeStyle: 'short',
+                              })}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-sm text-accent">
+                            Open <span aria-hidden="true">↗</span>
+                          </span>
+                        </Link>
+                        {pendingDelete === project.id ? (
+                          <fieldset
+                            className="m-0 flex shrink-0 items-center gap-2 border-0 px-2 py-0 text-xs"
+                            aria-label={`Delete ${project.name}?`}
+                          >
+                            <span className="hidden text-muted sm:inline">Delete project?</span>
+                            <button
+                              type="button"
+                              className="font-medium text-syntax-invalid disabled:opacity-50"
+                              aria-label={`Confirm delete ${project.name}`}
+                              disabled={deleting === project.id}
+                              onClick={() => void deleteProject(project)}
+                            >
+                              {deleting === project.id ? 'Deleting…' : 'Delete'}
+                            </button>
+                            <button
+                              type="button"
+                              className="text-muted disabled:opacity-50"
+                              aria-label={`Cancel deleting ${project.name}`}
+                              disabled={deleting === project.id}
+                              onClick={() => {
+                                setPendingDelete(undefined)
+                                setDeleteError(undefined)
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </fieldset>
+                        ) : (
+                          <button
+                            type="button"
+                            className="mr-2 shrink-0 rounded-md p-2 text-muted hover:bg-workspace hover:text-syntax-invalid"
+                            aria-label={`Delete ${project.name}`}
+                            title={`Delete ${project.name}`}
+                            onClick={() => {
+                              setDeleteError(undefined)
+                              setPendingDelete(project.id)
+                            }}
+                          >
+                            <Trash2 aria-hidden="true" size={15} />
+                          </button>
+                        )}
+                      </div>
+                      {deleteError?.id === project.id && (
+                        <p className="px-2 pb-4 text-xs text-syntax-invalid" role="alert">
+                          {deleteError.message}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>

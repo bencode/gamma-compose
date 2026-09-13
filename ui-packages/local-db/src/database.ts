@@ -1,7 +1,7 @@
 import { LocalDbError } from './errors.js'
 import { assertJson, isObject, prepareResources, type Resource } from './model.js'
 import { prepareQuery } from './query.js'
-import { openStorage, transact } from './storage.js'
+import { deleteStorage, openStorage, transact } from './storage.js'
 import type { DataRecord, LocalDb, OpenLocalDbOptions } from './types.js'
 
 const checkInput = (value: unknown, model: Resource) => {
@@ -18,15 +18,18 @@ const checkId = (id: string) => {
     throw new LocalDbError('VALIDATION_FAILED', 'id must be a nonempty string.')
 }
 
-export const openLocalDb = async (options: OpenLocalDbOptions): Promise<LocalDb> => {
-  if (
-    !isObject(options) ||
-    typeof options.databaseName !== 'string' ||
-    !options.databaseName.trim()
-  )
+const checkDatabaseName = (databaseName: unknown) => {
+  if (typeof databaseName !== 'string' || !databaseName.trim())
     throw new LocalDbError('INVALID_MODEL', 'A nonempty databaseName is required.')
+  return databaseName
+}
+
+export const openLocalDb = async (options: OpenLocalDbOptions): Promise<LocalDb> => {
+  if (!isObject(options))
+    throw new LocalDbError('INVALID_MODEL', 'A nonempty databaseName is required.')
+  const databaseName = checkDatabaseName(options.databaseName)
   const resources = prepareResources(options.resources)
-  const storage = await openStorage(options.databaseName, [...resources.values()])
+  const storage = await openStorage(databaseName, [...resources.values()])
   const resource = (name: string): Resource => {
     const found = resources.get(name)
     if (!found) throw new LocalDbError('UNKNOWN_RESOURCE', `Unknown resource: ${name}.`)
@@ -97,3 +100,6 @@ export const openLocalDb = async (options: OpenLocalDbOptions): Promise<LocalDb>
     },
   }
 }
+
+export const deleteLocalDb = async (databaseName: string): Promise<void> =>
+  deleteStorage(checkDatabaseName(databaseName))

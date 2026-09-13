@@ -61,16 +61,18 @@ const openConnection = (
     }
   })
 
+const storageName = (name: string) => `gamma-compose:local-db:${name}`
+
 export const openStorage = async (name: string, resources: readonly Resource[]) => {
   if (typeof indexedDB === 'undefined')
     throw new LocalDbError('STORAGE_UNAVAILABLE', 'IndexedDB is not available in this environment.')
   let db: IDBDatabase | undefined
   try {
-    db = await openConnection(`gamma-compose:local-db:${name}`, resources)
+    db = await openConnection(storageName(name), resources)
     if (missingLayout(db, resources)) {
       const version = db.version + 1
       db.close()
-      db = await openConnection(`gamma-compose:local-db:${name}`, resources, version)
+      db = await openConnection(storageName(name), resources, version)
     }
     let closed = false
     const connection = db
@@ -93,6 +95,30 @@ export const openStorage = async (name: string, resources: readonly Resource[]) 
     db?.close()
     throw storageError(cause)
   }
+}
+
+export const deleteStorage = (name: string): Promise<void> => {
+  if (typeof indexedDB === 'undefined')
+    return Promise.reject(
+      new LocalDbError('STORAGE_UNAVAILABLE', 'IndexedDB is not available in this environment.'),
+    )
+  let request: IDBOpenDBRequest
+  try {
+    request = indexedDB.deleteDatabase(storageName(name))
+  } catch (cause) {
+    return Promise.reject(storageError(cause))
+  }
+  return new Promise((resolve, reject) => {
+    request.onblocked = () =>
+      reject(
+        new LocalDbError(
+          'STORAGE_BLOCKED',
+          'Close other connections before deleting this database.',
+        ),
+      )
+    request.onerror = () => reject(storageError(request.error))
+    request.onsuccess = () => resolve()
+  })
 }
 
 export type Storage = Awaited<ReturnType<typeof openStorage>>

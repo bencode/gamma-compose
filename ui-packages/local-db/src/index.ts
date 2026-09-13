@@ -1,4 +1,4 @@
-export { openLocalDb } from './database.js'
+export { deleteLocalDb, openLocalDb } from './database.js'
 export { LocalDbError, type LocalDbErrorCode, type ValidationIssue } from './errors.js'
 export type {
   DataRecord,
