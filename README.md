@@ -154,6 +154,45 @@ pnpm start
 - Build before starting production. Static assets resolve relative to the server
   module, not the current working directory.
 
+### Docker deployment
+
+The production container builds the complete workspace, then copies the deployed
+server package and web assets into a non-root Node 24 runtime. The deployed server
+keeps the built-in UI source and local database package needed by the browser compiler.
+
+Create an untracked `.env` with a GLM Coding Plan credential and an immutable image tag:
+
+```sh
+GLM_API_KEY=replace-me
+GLM_MODEL=glm-5.3
+GAMMA_COMPOSE_TAG=<git-short-sha>
+```
+
+Build and start the independent production stack:
+
+```sh
+docker compose -f compose.production.yml build compose
+docker compose -f compose.production.yml up -d compose
+docker compose -f compose.production.yml ps
+docker compose -f compose.production.yml logs -f compose
+```
+
+The service listens on host bridge address `172.17.0.1:3303`. Its named
+`gamma-compose-data` volume keeps rebuildable preview artifacts across container
+restarts. Do not use `docker compose down -v` unless those artifacts should be deleted.
+There is currently no automatic artifact garbage collection.
+
+For rollback, keep images tagged by Git commit, change `GAMMA_COMPOSE_TAG` to the
+previous tag, and run:
+
+```sh
+docker compose -f compose.production.yml up -d --no-build compose
+```
+
+The application has no authentication, rate limiting, or billing controls. A public
+deployment exposes both the model proxy and compiler; place access control in the
+reverse proxy unless that cost and resource risk is explicitly accepted.
+
 ## Compilation contract
 
 ```http
